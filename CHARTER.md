@@ -27,7 +27,9 @@ Each property is a requirement, and each has to be shown by a test, not asserted
 3. **C3. Changes only through its own protocol.** Every change to a project's controls follows
    one route: **declare → generate → verify → approve** (§3). Generated files are never edited by
    hand. Drift is reported and refused, never auto-fixed.
-   *Test:* each step refuses when the step before it hasn't completed.
+   *Test:* each step refuses when the step before it hasn't completed, and a generated file changed
+   outside the route (by a person or by the agent) is reported as drift by verify and refused by
+   generate.
 4. **C4. Extended by declaration.** A project plugs itself in by shipping a declaration file
    (`ratchethub.toml`, specified in `docs/declaration-schema.md`). Adding a project never requires
    changing RH's code.
@@ -38,8 +40,9 @@ Each property is a requirement, and each has to be shown by a test, not asserted
 6. **C6. Honest about strength.** Every control RH generates is reported at its real strength:
    enforced by the operating system, by a permission rule, or only by a text-matching tripwire.
    Nothing is described as stronger than it is.
-   *Test:* every generated rule carries its strength in RH's report, checked against the runtime's
-   documentation.
+   *Test:* every generated rule carries its strength in RH's report. A rule reported as enforced (by
+   the operating system or by a permission rule) is shown to hold by a live probe compared against a
+   baseline with no settings; the runtime's documentation alone is not enough.
 
 ## 3. The change protocol (outline)
 
@@ -62,4 +65,6 @@ The detailed protocol is its own document. Its shape:
 
 - A second agent runtime, or a forge other than GitHub.
 - Protecting a project from sessions that start **outside** it (see the schema's open decisions).
-- Read protection for secrets. Nothing uses it today; it can be added by declaration later.
+- Read protection for secrets. It is left to a dedicated secrets tool; RH can add it by declaration
+  later.
+- Break-glass exceptions (an audited, person-approved way past the floor). Planned after v1.
