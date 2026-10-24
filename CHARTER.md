@@ -67,4 +67,9 @@ The detailed protocol is its own document. Its shape:
 - Protecting a project from sessions that start **outside** it (see the schema's open decisions).
 - Read protection for secrets. It is left to a dedicated secrets tool; RH can add it by declaration
   later.
-- Break-glass exceptions (an audited, person-approved way past the floor). Planned after v1.
+- Emergency break-glass (a fast bypass of the protocol, alarmed and reviewed after use). Deferred
+  until a need appears.
+- **Exemptions (commands run outside the sandbox). A known gap that must be closed:** until it is,
+  a project with a tool that can't run sandboxed can't adopt RH. They return as standing
+  exceptions: planned, approved, expiring, a variant of the change protocol (§3). See the schema's
+  "Exemptions: not in v1".

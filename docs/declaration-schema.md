@@ -6,13 +6,13 @@
 ## 1. What the declaration is
 
 A project plugs into RatchetHub (RH) by placing a declaration at its root. The declaration states
-**facts** about the project: what to protect, which commands are exempt, what network the agent may
-use. It contains no code. RH's generator reads it and writes the runtime's settings files.
+**facts** about the project: what to protect, which command forms to refuse, what network the agent
+may use. It contains no code. RH's generator reads it and writes the runtime's settings files.
 
 | File | Holds | Committed | Generated into |
 | --- | --- | --- | --- |
 | `ratchethub.toml` | facts true on every machine; all paths **relative to the project root** | yes | `.claude/settings.json` |
-| `ratchethub.local.toml` | facts about one machine; **absolute** paths allowed only here | **no**, must be ignored by git | `.claude/settings.local.json` |
+| `ratchethub.local.toml` | facts about one machine; **absolute** paths allowed only here | **no**, must be ignored by git; the generator refuses to run unless `git check-ignore` confirms it | `.claude/settings.local.json` |
 
 The format is [TOML](https://toml.io/en/v1.0.0). Python reads it with the standard library
 (`tomllib`, Python 3.11 and later), so reading a declaration needs no installed package.
@@ -27,11 +27,17 @@ them is refused (C5).
 | `sandbox.enabled` | `true` | Bash runs inside the operating system sandbox |
 | `sandbox.failIfUnavailable` | `true` | the runtime refuses to start rather than run unsandboxed |
 | `sandbox.allowUnsandboxedCommands` | `false` | the agent can't retry a blocked command outside the sandbox |
+| `permissions.disableBypassPermissionsMode` | `"disable"` | no one can switch permission checks off. It is a lock: the runtime applies the strictest value any settings file sets |
 | self-protection | `.claude/`, `ratchethub.toml`, `ratchethub.local.toml` | C2: the agent can't edit its own leash |
+| code-run paths | `.mcp.json`, `.git/hooks`, `.git/config` | each makes the runtime or git run code outside the sandbox |
 
 Self-protection is written both ways: `sandbox.filesystem.denyWrite` stops Bash, and a
 `permissions.deny` `Edit(...)` rule stops the file tools. The sandbox covers shell commands only;
 the file tools follow permission rules instead.
+
+Code-run paths get an `Edit(...)` deny only. The sandbox already denies Bash writes to them, but
+for the file tools the runtime only prompts for them, or leaves them to the classifier in auto
+mode, so RH denies them outright.
 
 ## 3. Sections
 
@@ -63,26 +69,36 @@ Path rules, all enforced by the generator:
   one, so a wildcard would look like protection and be none.
 - **Must exist** when generating, and must not pass through a symbolic link.
 
-### `[[exempt]]`: commands that run outside the sandbox
+### Exemptions: not in v1
 
-| Field | Type | Generated into | Strength |
-| --- | --- | --- | --- |
-| `command` | string, a command pattern | `sandbox.excludedCommands` | **removes the sandbox entirely** for a matching call |
-| `reason` | string, required | RH's report | — |
-
-An exempt command runs with the full access of the person running the session. The runtime can't
-limit it to one folder. Matching is on the command's text: a call that adds `cd`, a redirect or a
-command substitution stays sandboxed. Exemptions are allowed only in `ratchethub.toml`, where they
-are reviewed with the project, never in the local file.
+> **Known gap, must be closed.** v1 has no way to run a command outside the sandbox, so a project
+> with a tool that can't run sandboxed can't adopt RH yet. The generator refuses an `[[exempt]]`
+> section. Exemptions return as **standing exceptions**, a variant of the change protocol (charter
+§3), and that design must meet three facts:
+>
+> - The runtime's `sandbox.excludedCommands` **removes the sandbox entirely** for a matching call.
+>   The command runs with the full access of the person running the session, and the runtime can't
+>   limit it to one folder.
+> - The agent could rewrite whatever an exempt command runs (a script, a config file it reads), then
+>   run it with that access. Everything it runs must be protected.
+> - Matching is on the command's text. A call that adds `cd`, a redirect or a command substitution
+>   stays sandboxed, but a trailing `*` passes any arguments the agent chooses.
 
 ### `[network]`: hosts sandboxed commands may reach
 
 | Field | Type | Generated into | Strength |
 | --- | --- | --- | --- |
-| `allow` | array of host names | `sandbox.network.allowedDomains` | enforced by the sandbox proxy, by host name only |
+| `allow` | array of host names | `sandbox.network.allowedDomains` | listed hosts: enforced by the sandbox proxy, by host name only. Unlisted hosts: decided by permission mode |
 
-Empty by default. The proxy doesn't inspect encrypted traffic, so an allowed host is trusted with
-whatever the agent sends it. Allowed only in `ratchethub.toml`.
+Empty by default, and **empty doesn't mean no network.** A host outside the list is asked about in
+the default mode, denied in `dontAsk` mode, checked per command in auto mode, and allowed in
+`bypassPermissions` mode (which the floor disables). Denying unlisted hosts outright needs
+`sandbox.network.strictAllowlist`, which only user or managed settings can set; a repository can't.
+
+The proxy doesn't inspect encrypted traffic, so an allowed host is trusted with whatever the agent
+sends it. Don't list `localhost` or an IP address: the proxy refuses names that resolve to local
+addresses unless an IP address is listed, and a `localhost` entry exposes every local port to
+commands that use the proxy. Allowed only in `ratchethub.toml`.
 
 ### `[[deny_command]]`: command forms the agent must not run
 
@@ -112,8 +128,7 @@ The generator refuses any other section in it.
 
 ## 5. Example
 
-A project that protects its raw data and its CI workflows, and lets one loader script run outside
-the sandbox:
+A project that protects its raw data and its CI workflows:
 
 ```toml
 # ratchethub.toml — declared once; RatchetHub generates .claude/settings.json from it.
@@ -126,10 +141,6 @@ name = "example-analytics"
 
 [protect]
 folders = ["data/raw", ".github/workflows"]
-
-[[exempt]]
-command = "python scripts/load_orders.py *"
-reason = "opens a database connection the sandbox proxy can't carry"
 
 [network]
 allow = ["api.github.com", "github.com"]
@@ -162,7 +173,8 @@ folders = ["/srv/shared-datasets"]
    (`permissions.deny` and `sandbox.filesystem.denyWrite`) and leaves the rest. The runtime also
    writes this file: a "don't ask again" approval saves an allow rule there, and the `/sandbox`
    panel saves its choices there. Verification catches the panel switching the floor off, because
-   it checks the effective settings (charter §3, step 3).
+   it checks the effective settings (charter §3, step 3). This is a **detective** control: it
+   catches the change when verification runs, and between runs the change goes unnoticed.
 3. **Sessions that start outside the project. Ruled: out of v1, a stated gap.** A project's
    settings apply only to sessions started in it. Protecting it from sessions started elsewhere
    would mean writing to the user-level settings file, which every project shares. A project that
