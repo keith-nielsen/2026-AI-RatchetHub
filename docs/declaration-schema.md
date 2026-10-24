@@ -151,21 +151,22 @@ The same person's machine-only additions, never committed:
 folders = ["/srv/shared-datasets"]
 ```
 
-## 6. Open decisions
+## 6. Decisions
 
-Each has a recommendation; none is settled until the operator rules.
+**All four ruled by the operator on 2026-10-24**, each as recommended.
 
-1. **Who owns `.claude/settings.json`.** *Recommended:* RH owns the whole file and regenerates it.
-   If the file on disk differs from RH's last output, the generator stops and reports drift. It
-   never merges by hand and never overwrites silently.
-2. **Who owns `.claude/settings.local.json`.** The runtime also writes this file: a "don't ask
-   again" approval saves an allow rule there, and the `/sandbox` panel saves its choices there.
-   *Recommended:* RH owns only the keys it generates (`permissions.deny` and
-   `sandbox.filesystem.denyWrite`) and leaves the rest. Verification then catches the panel switching
-   the floor off, because it checks the effective settings (charter §3, step 3).
-3. **Sessions that start outside the project.** A project's settings apply only to sessions started
-   in it. Protecting it from sessions started elsewhere means writing to the user-level settings
-   file, which every project shares. *Recommended:* out of v1, stated as a known gap.
-4. **Format.** *Recommended:* TOML. JSON allows no comments, and a declaration needs to say why.
-   YAML depends on indentation and guesses types (an unquoted `no` can read as `false`). TOML has
+1. **Who owns `.claude/settings.json`. Ruled: RH owns the whole file** and regenerates it. If the
+   file on disk differs from RH's last output, the generator stops and reports drift. It never
+   merges by hand and never overwrites silently. Anything a project wants in that file is declared.
+2. **Who owns `.claude/settings.local.json`. Ruled: RH owns only the keys it generates**
+   (`permissions.deny` and `sandbox.filesystem.denyWrite`) and leaves the rest. The runtime also
+   writes this file: a "don't ask again" approval saves an allow rule there, and the `/sandbox`
+   panel saves its choices there. Verification catches the panel switching the floor off, because
+   it checks the effective settings (charter §3, step 3).
+3. **Sessions that start outside the project. Ruled: out of v1, a stated gap.** A project's
+   settings apply only to sessions started in it. Protecting it from sessions started elsewhere
+   would mean writing to the user-level settings file, which every project shares. A project that
+   needs more lists the sibling folders in its local declaration.
+4. **Format. Ruled: TOML.** JSON allows no comments, and a declaration needs to say why. YAML
+   depends on indentation and guesses types (an unquoted `no` can read as `false`). TOML has
    neither problem and Python reads it without a package.
