@@ -1,7 +1,7 @@
 # RatchetHub charter
 
-> **Status:** draft, 2026-10-24. Awaiting operator sign-off (the Phase 1 exit). Once signed, a change
-> to this charter goes through the same protocol as any other RatchetHub change (§3).
+> **Status:** signed off by the operator, 2026-10-24. A change to this charter goes through the same
+> protocol as any other RatchetHub change (§3).
 
 ## 1. What RatchetHub is
 

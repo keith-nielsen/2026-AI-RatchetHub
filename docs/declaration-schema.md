@@ -1,6 +1,6 @@
 # Declaration schema: `ratchethub.toml`
 
-> **Status:** draft, 2026-10-24, schema version 1. Implements charter C4 (extended by declaration)
+> **Status:** signed off by the operator, 2026-10-24, schema version 1. Implements charter C4 (extended by declaration)
 > and C5 (only tightens).
 
 ## 1. What the declaration is
