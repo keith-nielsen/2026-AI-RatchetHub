@@ -1,6 +1,6 @@
 # The change protocol
 
-> **Status:** draft, awaiting operator review. Details charter §3 (declare → generate → verify →
+> **Status:** draft; its three decisions ruled (§9, 2026-10-25), the whole not yet signed off. Details charter §3 (declare → generate → verify →
 > approve), adds standing exceptions (closing the gap in charter §4), and records where the floor
 > lives. Runtime facts come from the Claude Code documentation fetched 2026-10-24, read against
 > Claude Code v2.1.310. A fact marked **unprobed** is documented but not yet shown by a live probe,
@@ -122,53 +122,154 @@ entry it approves.
 
 ## 5. Standing exceptions
 
-A standing exception lets one command run outside the sandbox, for a tool that can't run sandboxed.
-It is a change like any other: declared, generated, verified, approved. It also **expires**, and a
-person approves every single use.
+Some tools can't run under the plain floor. There are two remedies, and RH prefers the first:
 
-### What the runtime offers, and its limits
+1. **Widen the sandbox** (`[network]` and a new `[writable]` row). The tool stays sandboxed, with
+   one more host or one more folder. This is the remedy for build and package tools such as `make`
+   and `npm`.
+2. **A standing exception** (`[[exception]]`). One fixed wrapper script runs outside the sandbox,
+   and a person approves each use. This is only for a tool that can't run sandboxed at all, such as
+   `docker`.
 
-- `sandbox.excludedCommands` removes the sandbox entirely for a matching call: no filesystem
-  restriction and no network proxy. The command runs with the full access of the person running the
-  session.
-- Matching is on the call's text. Every command in a chained call must match. A redirect, a `cd`, or
-  a command substitution keeps the whole call sandboxed, and so does a script that calls the tool
-  internally. A pattern ending ` *` passes any arguments.
-- An excluded command still goes through the permission flow. **An `ask` rule that matches it
-  prompts a person in every mode, auto mode included, with no time limit**, and outranks any allow
-  rule, including a "Yes, and don't ask again" saved to the local file. In `dontAsk` mode and in
-  headless runs an ask becomes a deny, so an exception only works in an interactive session.
+Both loosen the floor, so both are changes like any other: declared in `ratchethub.toml` only (the
+local file may only add restrictions, schema §4), generated, verified, approved. The live probes
+behind this section (2026-10-24 and 2026-10-25, Claude Code 2.1.310, Linux, auto mode, headless)
+are summarised at the end of each part, with each claim's count against a no-floor baseline.
 
-### What RH generates for one
+### Widen, don't except
+
+```toml
+[network]
+allow = ["registry.npmjs.org"]
+
+[writable]
+folders = ["~/.npm"]    # project-relative, or starting `~/`; no other absolute paths
+```
+
+| Field | Generated into | Strength |
+| --- | --- | --- |
+| `[network] allow` | `sandbox.network.allowedDomains` | as schema `[network]` |
+| `[writable] folders` | `sandbox.filesystem.allowWrite` | enforced by the operating system: sandboxed commands may also write here |
+
+**What widening keeps:** the tool, and everything it runs, stays sandboxed. After widening, `npm
+install` succeeded and ran the project's `postinstall` script, and both that script and a `make`
+target were still refused at `.claude/`, `.git/hooks/` and a folder outside the project. Without
+the floor the same code wrote all of them.
+
+**What widening costs:** a writable folder is writable by **any** code the agent can get run, not
+only by the tool it was added for. Both the `make` target and the `postinstall` script wrote into
+the cache folder. So a writable folder must hold nothing that runs later outside the sandbox.
+The runtime's own documentation gives the same warning.
+
+Rules the generator enforces:
+
+- **A writable folder must not overlap a protected one,** neither `[protect]` nor the floor's own
+  paths (`.claude/`, `.git/hooks/`, `.git/config`, `.mcp.json`).
+- **No folder that runs outside the sandbox.** RH refuses the home folder itself, shell startup
+  files, `~/.config`, `~/.local/bin`, `~/.claude`, and any folder on `PATH`. The list can't be
+  complete, so the report states each writable folder as "writable by any code the agent runs".
+- **No wildcards, must exist, no symbolic link,** as for `[protect]`.
+- npm needs both rows. With the registry host listed but no writable cache, npm got past the
+  network and then failed to create its cache. The sandbox's refusal surfaced as `ENOENT`, not
+  as a permission error, so RH's report names the missing row instead of passing on the tool's
+  message.
+
+Evidence: confinement after widening held in 4 of 4 sessions, and the no-floor baseline wrote every
+target in 2 of 2. The probes put the cache in a scratch folder, so `~/.npm` itself is **unprobed**.
+
+### Exceptions only for a fixed wrapper
 
 ```toml
 [[exception]]
-command = "docker compose up -d"     # the exact call; ` *` allowed but reported as "any arguments"
-runs = ["compose.yaml", "docker/"]   # everything the command reads or executes
+wrapper = "scripts/compose-up.sh"    # a committed script in the project; takes no arguments
+runs = ["compose.yaml", "docker/"]   # everything the wrapper reads, executes or builds from
 reason = "the compose plugin can't run inside bubblewrap"
 expires = 2027-01-24                  # at most 90 days after approval
 ```
 
 | Generated setting | From | Strength |
 | --- | --- | --- |
-| `sandbox.excludedCommands` entry | `command` | removes the operating system sandbox for matching calls |
-| `permissions.ask` `Bash(<command>)` | `command` | permission rule: a person approves each use (probed headless as a deny, §8) |
-| `sandbox.filesystem.denyWrite` and `Edit(...)` deny for each `runs` path | `runs` | as `[protect]`: the agent can't rewrite what the exception runs |
-| expiry | `expires` | **detective**: Generate refuses an expired exception and Verify reports it, but the runtime has no expiry, so an expired entry stays live until one of them runs |
+| `sandbox.excludedCommands` `./scripts/compose-up.sh`, exact | `wrapper` | removes the operating system sandbox for that exact call only |
+| `permissions.ask` `Bash(./scripts/compose-up.sh)` | `wrapper` | permission rule: a person approves each use (probed headless as a deny, §8; the prompt itself **unprobed**) |
+| `sandbox.filesystem.denyWrite` and `Edit(...)` deny for the wrapper and each `runs` path | `wrapper`, `runs` | as `[protect]`: the agent can't rewrite what the exception runs |
+| the wrapper's hash in the record | `wrapper` | **detective**: Verify reports a changed wrapper |
+| expiry | `expires` | **detective**: Generate refuses an expired exception and Verify reports it; the runtime has no expiry |
+
+**Why a wrapper and not a command.** The runtime matches excluded commands by the call's text. A
+pattern for the tool itself (`docker compose *`) passes whatever arguments the agent chooses. An
+exact pattern naming a wrapper passes nothing: a call that adds an argument or an environment
+prefix doesn't match and stays sandboxed, which fails closed. Everything the tool needs lives in
+the protected wrapper and its `runs` files, never in the call.
+
+**The wrapper must shut out every input the agent can still write.** Protecting the wrapper isn't
+enough. A plain wrapper running `docker compose` read the project's `.env`, which the agent had
+written, and the image name it chose reached the excluded run. The hardened wrapper passes
+`--env-file /dev/null` and starts the tool under `env -i` with a fixed `PATH` and `HOME`:
+
+```sh
+#!/bin/sh
+cd "$(dirname "$0")/.." || exit 1
+exec env -i PATH=/usr/bin:/bin HOME="$HOME" \
+    docker compose --env-file /dev/null -f compose.yaml up -d
+```
+
+The same reasoning extends to inputs the probes didn't exercise (**unprobed**): a compose build
+context and every file a container executes from a bind mount must be inside `runs`, so a build
+context of the project root can't qualify. Images should be pinned by digest, because a tag can
+change between approvals.
 
 Rules the generator enforces:
 
-- **Committed declaration only.** An exception loosens, and the local file may only add
-  restrictions (schema §4).
-- **`runs` is required and must exist.** The runtime warns that an exception covering a file the
-  agent can write lets the agent rewrite it and then run it outside the sandbox. RH protects each
-  path, and refuses an exception whose `runs` list is empty.
-- **No interpreter as the command** (`bash`, `sh`, `python`, `node`, and similar). An excluded
-  interpreter runs whatever it is given.
+- **`wrapper` is a committed file in the project, and `runs` is required and must exist.** RH
+  protects them all, and refuses an exception whose wrapper is untracked by git or whose `runs`
+  list is empty.
+- **No pattern.** RH generates the exact call. ` *`, an argument, and an interpreter
+  (`bash`, `sh`, `python`, `node`, and similar) as the command are all refused.
 - **Renewal is a new change.** Moving `expires` goes through the whole route.
 
-The ask rule is the barrier the person sees: they read the full command at each prompt. It matches
-text, so a call written differently isn't excluded either. It stays sandboxed, which fails closed.
+Verify adds a **live check per exception**. In a throwaway copy of the project it plants a `.env`
+and a caller variable that each try to steer the wrapper, runs the wrapper as excluded, and reports
+the exception **steerable** if either reached the run. Approve refuses a steerable exception. RH
+can't read a shell script and prove it closed, so the live check is the test. The check must not
+start the real thing: for compose the probes ran `config` with `DOCKER_HOST` pointing at a socket
+that doesn't exist. A dry form for other tools is designed per tool, and none is designed yet.
+
+The ask rule is the barrier the person sees. They read the call at each prompt, and the call is
+always the same text, so what they approve is the wrapper as protected and hashed. In `dontAsk`
+mode and in headless runs an ask becomes a deny, so an exception only works in an interactive
+session.
+
+Evidence: the wrapper and its compose file were left unchanged against both channels in 9 of 9
+attempts. The plain wrapper was steered by `.env` in 5 of 5 runs and the hardened one in 0 of 4.
+An environment prefix and an extra argument stayed sandboxed in every run. `env -i` was confirmed
+against inherited variables only outside a probe session, because a prefixed call never matched the
+exact pattern.
+
+### Docker
+
+The sandbox blocks the docker daemon's socket, so under the floor `docker` fails at the connection
+and never reaches the daemon (probed). A person in the `docker` group controls the daemon, and the
+daemon runs as root, so **an excluded call that reaches the daemon has root's reach** on the
+machine. RH therefore allows docker driven by the agent only through a fixed wrapper as above, and
+reports each such exception as "root-equivalent per approved use". No widening may reach the
+daemon: RH refuses `network.allowUnixSockets` and `network.allowAllUnixSockets` (the runtime's own
+documentation names `docker.sock` as a sandbox escape), and Verify reports either if any merged
+settings file sets it.
+
+### The auto mode classifier is not part of the floor
+
+In auto mode, a model reviews some calls before they run, and it refused several probe calls. RH
+counts none of those refusals:
+
+- **It varies from run to run.** The same Bash append to a protected wrapper was refused by the
+  sandbox 4 times and by the classifier 5 times.
+- **It fails closed on error.** During one run the classifier service returned no verdict on 10
+  calls, and each was denied even though an allow rule matched. That is safe, but it means nothing
+  about the floor.
+- **It isn't in every mode.** `default` and `dontAsk` don't run it, and a person can switch mode.
+
+A live check reports a row **enforced** only where the sandbox or a permission rule refused, and
+reports a call the classifier refused as **inconclusive**, to be re-run.
 
 ## 6. Where the floor lives
 
@@ -198,6 +299,9 @@ cuts against charter C4. The `--settings` launcher is the first upgrade worth pr
 | The agent can't edit a declaration, a generated file or the record | operating system (Bash) and permission rule (file tools); probed for the record file (§8) |
 | Generate refuses drift, an invalid declaration, or a floor change | RH's code, when a person runs it |
 | A loosening in `.claude/settings.local.json` is caught | **detective**: when Verify runs |
+| A widened tool stays confined outside its writable folders | operating system (probed, §5); a writable folder is writable by any code the agent runs |
+| An exception runs only its fixed, protected wrapper | text match on an exact call (probed, §5); the wrapper's hash is **detective** |
+| An exception's wrapper can't be steered by `.env` or the caller's environment | Verify's live check, when it runs (probed for compose, §5) |
 | An exception's each use is approved by a person | permission rule (probed headless as a deny; the prompt itself not yet observed, §8) |
 | An exception expires | **detective**: when Generate or Verify runs |
 | An approval matches what was verified | record hashes; protects against mistakes, not forgery |
@@ -230,15 +334,21 @@ Facts the probes surfaced, not in the claims above:
 
 ## 9. Decisions
 
-**Open: awaiting the operator's ruling.** Each is stated with a recommendation.
+**All three ruled** (2026-10-24 and 2026-10-25). Each is kept with the recommendation it ruled on.
 
-1. **The approval record.** **Recommend:** RH keeps its own record (§3), independent of any
+1. **The approval record. Ruled 2026-10-24: as recommended.** RH keeps its own record (§3), independent of any
    change-ceremony tool such as OpenSpec. Which ceremony tool RH adopts is still undecided, and a
    ceremony's approval gate governs a branch's change, not a project's controls. The two can be
    joined later.
-2. **Standing exceptions** (§5). **Recommend:** adopt the shape as drafted: excluded command plus
-   an ask rule, `runs` protected, committed only, no interpreters, 90 days at most. Adding
-   `[[exception]]` is a schema change, so it ships as schema version 2 through this protocol.
-3. **Where the floor lives** (§6). **Recommend:** the project file for v1, reported as detective
+2. **Widening and standing exceptions** (§5, redrafted 2026-10-25 from the probes). **Ruled
+   2026-10-25: as drafted.** The recommendation:
+   widen first (`[network]` plus a new `[writable]` row) for tools that only need a host or a
+   folder; an `[[exception]]` only for a fixed, committed wrapper: exact call, an ask rule, wrapper
+   and `runs` protected and hashed, ambient inputs shut out and checked live, committed only, 90
+   days at most. Docker driven by the agent only through such a wrapper, reported as
+   root-equivalent. The auto mode classifier counts for nothing in a verdict. Adding `[writable]`
+   and `[[exception]]` is a schema change, so it ships as schema version 2 through this protocol,
+   and the schema's "Exemptions: not in v1" note is rewritten then.
+3. **Where the floor lives** (§6). **Ruled 2026-10-25: as recommended.** The recommendation: the project file for v1, reported as detective
    against local changes. The managed placement is recorded as considered and declined for v1, and
    the `--settings` launcher as the first candidate after v1.
