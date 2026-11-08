@@ -15,8 +15,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import __version__
-from .declaration import COMMITTED_NAME, LOCAL_NAME, SCHEMA_VERSION, DeclarationError, load_committed, load_local
-from .render import RenderError, Row, render_committed, render_local
+from .declaration import COMMITTED_NAME, LOCAL_NAME, DeclarationError, load_committed, load_local
+from .render import GUARD_PATH, RenderError, Row, render_committed, render_local
+
+GUARD_SOURCE = Path(__file__).with_name("guard.py")
 
 SETTINGS = ".claude/settings.json"
 SETTINGS_LOCAL = ".claude/settings.local.json"
@@ -62,6 +64,11 @@ def generate(root: Path, *, claude_version: str, now: str, adopt: bool = False) 
         local = load_local(root)
     except DeclarationError as exc:
         raise GenerateError(exc.errors) from None
+    overlap = [f"[writable] folder {w!r} overlaps the local [protect] folder {p!r}"
+               for w in decl.writable if not w.startswith("~/") for p in local.protect
+               if not p.startswith("/") and (w == p or w.startswith(p + "/") or p.startswith(w + "/"))]
+    if overlap:
+        raise GenerateError(overlap)
     try:
         committed = render_committed(decl)
         local_out = render_local(local)
@@ -69,6 +76,7 @@ def generate(root: Path, *, claude_version: str, now: str, adopt: bool = False) 
         raise GenerateError([str(exc)]) from None
 
     settings_bytes = (json.dumps(committed.settings, indent=2) + "\n").encode("utf-8")
+    guard_bytes = GUARD_SOURCE.read_bytes()
     new_local_keys = {
         "permissions.deny": local_out.settings["permissions"]["deny"],
         "sandbox.filesystem.denyWrite": local_out.settings["sandbox"]["filesystem"]["denyWrite"],
@@ -84,16 +92,19 @@ def generate(root: Path, *, claude_version: str, now: str, adopt: bool = False) 
             raise GenerateError(reasons)
 
     # --- write -------------------------------------------------------------------------------------
-    (root / ".claude").mkdir(exist_ok=True)
+    (root / GUARD_PATH).parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write(root / GUARD_PATH, guard_bytes)
     _atomic_write(root / SETTINGS, settings_bytes)
     _write_local_keys(root / SETTINGS_LOCAL, new_local_keys)
 
-    hashes = {SETTINGS: sha(settings_bytes), SETTINGS_LOCAL: keys_hash(rh_local_keys(root / SETTINGS_LOCAL))}
+    hashes = {SETTINGS: sha(settings_bytes), GUARD_PATH: sha(guard_bytes),
+              SETTINGS_LOCAL: keys_hash(rh_local_keys(root / SETTINGS_LOCAL))}
     local_decl = root / LOCAL_NAME
-    common = {"step": "generate", "at": now, "ratchethub": __version__, "schema": SCHEMA_VERSION,
+    common = {"step": "generate", "at": now, "ratchethub": __version__, "schema": decl.schema,
               "claude_code": claude_version}
     committed_entry = {**common, "declaration": sha((root / COMMITTED_NAME).read_bytes()),
-                       "files": {SETTINGS: hashes[SETTINGS]}, "adopted": records is None and adopt}
+                       "files": {SETTINGS: hashes[SETTINGS], GUARD_PATH: hashes[GUARD_PATH]},
+                       "adopted": records is None and adopt}
     local_entry = {**common, "declaration": sha(local_decl.read_bytes()) if local_decl.exists() else None,
                    "files": {SETTINGS_LOCAL: hashes[SETTINGS_LOCAL]}}
     old_committed, old_local = records if records is not None else ({"entries": []}, {"entries": []})
@@ -159,6 +170,8 @@ def read_records(root: Path) -> tuple[dict, dict] | None:
 def _first_run_checks(root: Path, new_settings: dict, new_local_keys: dict, adopt: bool) -> list[str]:
     reasons, notes = [], []
     settings_path = root / SETTINGS
+    if (root / GUARD_PATH).exists() and not adopt:
+        raise GenerateError([f"{GUARD_PATH} exists and RH has no record of writing it; pass adopt to take it over"])
     if settings_path.exists():
         existing = read_json(settings_path)
         if not isinstance(existing, dict):
@@ -195,6 +208,12 @@ def drift_reasons(root: Path, committed_record: dict, local_record: dict) -> lis
         what = "is missing" if actual is None else "differs from RH's last output"
         reasons.append(f"drift: {SETTINGS} {what}. Restore it from git, or move the change into "
                        f"{COMMITTED_NAME} and restore, then run Generate again")
+    files = last_generate(committed_record)["files"]
+    if GUARD_PATH in files:
+        guard = root / GUARD_PATH
+        if (sha(guard.read_bytes()) if guard.exists() else None) != files[GUARD_PATH]:
+            reasons.append(f"drift: {GUARD_PATH} differs from RH's last output. Restore it from git, then run "
+                           "Generate again")
     expected_local = last_generate(local_record)["files"].get(SETTINGS_LOCAL)
     if keys_hash(rh_local_keys(root / SETTINGS_LOCAL)) != expected_local:
         reasons.append(f"drift: RH's keys in {SETTINGS_LOCAL} ({', '.join(LOCAL_RH_KEYS)}) differ from RH's last "

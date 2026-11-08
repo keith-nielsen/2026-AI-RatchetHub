@@ -105,9 +105,12 @@ def test_refuses_an_invalid_local_declaration(repo):
     refuse(repo, "local declaration")
 
 
-def test_refuses_a_declaration_the_renderer_cannot_honour(repo):
-    (repo / "ratchethub.toml").write_text(HEADER + "[publish]\nremotes_allowed = false\n", encoding="utf-8")
-    refuse(repo, "outbound")
+def test_refuses_a_writable_folder_the_local_declaration_protects(repo):
+    (repo / "cache").mkdir()
+    (repo / "ratchethub.toml").write_text(HEADER.replace("schema = 1", "schema = 2")
+                                          + '[writable]\nfolders = ["cache"]\n', encoding="utf-8")
+    (repo / "ratchethub.local.toml").write_text('[protect]\nfolders = ["cache"]\n', encoding="utf-8")
+    refuse(repo, "overlaps")
 
 
 def test_refuses_without_a_claude_code_version(repo):
@@ -292,3 +295,32 @@ def test_adoption_succeeds_when_nothing_is_dropped_and_is_recorded(repo):
 
 def test_rh_local_keys_reads_absent_as_empty(tmp_path):
     assert rh_local_keys(tmp_path / "missing.json") == {"permissions.deny": [], "sandbox.filesystem.denyWrite": []}
+
+
+# --- the guard file ---------------------------------------------------------------------------------
+
+
+def test_generate_installs_the_guard_and_records_its_hash(repo):
+    from ratchethub.render import GUARD_PATH
+    from ratchethub.generate import GUARD_SOURCE
+
+    generate(repo, claude_version="v", now="t")
+    assert (repo / GUARD_PATH).read_bytes() == GUARD_SOURCE.read_bytes()
+    entry = json.loads((repo / ".claude/ratchethub-record.json").read_text())["entries"][-1]
+    assert GUARD_PATH in entry["files"]
+
+
+def test_an_edited_guard_is_drift(repo):
+    from ratchethub.render import GUARD_PATH
+
+    generate(repo, claude_version="v", now="t")
+    (repo / GUARD_PATH).write_text("# edited\n")
+    refuse(repo, "ratchethub_guard.py differs")
+
+
+def test_first_run_refuses_an_unrecorded_guard_without_adopt(repo):
+    from ratchethub.render import GUARD_PATH
+
+    (repo / GUARD_PATH).parent.mkdir(parents=True)
+    (repo / GUARD_PATH).write_text("# someone else's\n")
+    refuse(repo, "pass adopt")

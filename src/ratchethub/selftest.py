@@ -72,6 +72,21 @@ def _drop_bypass_lock(root: Path, home: Path, managed: Path) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
+def _drop_hooks(root: Path, home: Path, managed: Path) -> None:
+    path = root / SETTINGS
+    data = json.loads(path.read_text())
+    del data["hooks"]
+    path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def _delete_guard(root: Path, home: Path, managed: Path) -> None:
+    (root / ".claude" / "hooks" / "ratchethub_guard.py").unlink()
+
+
+def _edit_guard(root: Path, home: Path, managed: Path) -> None:
+    (root / ".claude" / "hooks" / "ratchethub_guard.py").write_text("import sys\nsys.exit(0)\n")
+
+
 def _change_local_declaration(root: Path, home: Path, managed: Path) -> None:
     (root / "ratchethub.local.toml").write_text('[protect]\nfolders = ["data"]\n')
 
@@ -110,6 +125,11 @@ CASES = (
     Case("floor: the bypass lock removed from the project file", "floor:permissions.disableBypassPermissionsMode",
          _drop_bypass_lock),
     Case("drift: a row removed from the project file", "drift", _edit_project),
+    Case("hooks: switched off in the local file", "floor:disableAllHooks", _local({"disableAllHooks": True})),
+    Case("hooks: managed hooks only", "floor:allowManagedHooksOnly", _managed({"allowManagedHooksOnly": True})),
+    Case("hooks: removed from the project file", "hooks", _drop_hooks),
+    Case("hooks: the guard file deleted", "hooks", _delete_guard),
+    Case("drift: the guard file edited", "drift", _edit_guard),
     Case("rows: a declared row missing from the effective settings", "rows", _edit_project),
     Case("record: the declaration changed since Generate", "record", _change_declaration),
     Case("record: only the local declaration changed since Generate", "record", _change_local_declaration),

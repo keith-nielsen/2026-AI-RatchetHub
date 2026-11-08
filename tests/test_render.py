@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from ratchethub.declaration import Declaration, DenyCommand, LocalDeclaration
-from ratchethub.render import FLOOR_DENY_WRITE, FLOOR_EDIT_DENY, RenderError, render_committed, render_local
+from ratchethub.render import FLOOR_DENY_WRITE, FLOOR_EDIT_DENY, RenderError, hooks, render_committed, render_local
 
 
 def decl(**kw) -> Declaration:
@@ -69,10 +69,29 @@ def test_no_project_relative_edit_rule_uses_a_double_slash():
     assert all(r.startswith("Edit(/") and not r.startswith("Edit(//") for r in edits)
 
 
-def test_refuses_to_render_a_no_remotes_declaration_until_the_outbound_hook_exists():
-    # C6: RH never reports a control it doesn't generate.
-    with pytest.raises(RenderError, match="outbound"):
-        render_committed(decl(remotes_allowed=False))
+def test_no_remotes_passes_the_flag_to_the_outbound_hook():
+    s = render_committed(decl(remotes_allowed=False)).settings
+    assert s["hooks"]["PreToolUse"][0]["hooks"][0]["command"].endswith("outbound --no-remotes")
+    assert render_committed(decl()).settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"].endswith(" outbound")
+
+
+def test_hooks_are_always_generated_and_reported_as_tripwires():
+    result = render_committed(decl())
+    assert result.settings["disableAllHooks"] is False
+    assert result.settings["hooks"]["Stop"][0]["hooks"][0]["command"].endswith(" relay")
+    hook_rows = [r for r in result.rows if r.generated.startswith("hook ")]
+    assert len(hook_rows) == 3 and all("tripwire" in r.strength for r in hook_rows)
+
+
+def test_writable_folders_render_into_allow_write_and_are_reported_as_a_loosening():
+    result = render_committed(decl(writable=("build/cache", "~/.npm")))
+    assert result.settings["sandbox"]["filesystem"]["allowWrite"] == ["./build/cache", "~/.npm"]
+    rows = [r for r in result.rows if r.generated.startswith("allowWrite ")]
+    assert len(rows) == 2 and all("any code the agent runs" in r.strength for r in rows)
+
+
+def test_no_writable_folders_write_no_allow_write_key():
+    assert "allowWrite" not in render_committed(decl()).settings["sandbox"]["filesystem"]
 
 
 def test_empty_network_list_writes_no_allowed_domains_key():
@@ -164,6 +183,8 @@ def test_renders_the_schema_example_exactly():
                 ]
             },
         },
+        "disableAllHooks": False,
+        "hooks": hooks(False),
     }
 
 

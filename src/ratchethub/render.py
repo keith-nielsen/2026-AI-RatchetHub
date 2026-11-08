@@ -18,6 +18,8 @@ OS = "operating system sandbox (Bash only)"
 RULE = "permission rule (file tools)"
 TRIPWIRE = "tripwire: matches command text only; another spelling of the command is not caught"
 PROXY = "sandbox proxy, by host name only; unlisted hosts are decided by permission mode"
+HOOK = "hook, a tripwire: reads the command in command position; a command it can't see is not caught"
+WIDENS = "loosening: the operating system sandbox lets any code the agent runs write here"
 FLOOR = "floor setting, written whatever the declaration says"
 
 SELF_PROTECTED_DIRS = (".claude",)
@@ -33,6 +35,19 @@ FLOOR_EDIT_DENY = (
     "Edit(/.git/config)",
 )
 FLOOR_DENY_WRITE = tuple(f"./{p}" for p in (*SELF_PROTECTED_DIRS, *SELF_PROTECTED_FILES))
+
+# The hooks (guard.py), copied by Generate under the floor's self-protection.
+GUARD_PATH = ".claude/hooks/ratchethub_guard.py"
+_GUARD_CMD = 'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/ratchethub_guard.py" '
+
+
+def hooks(no_remotes: bool) -> dict:
+    outbound = _GUARD_CMD + "outbound" + (" --no-remotes" if no_remotes else "")
+    return {
+        "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": outbound},
+                                                      {"type": "command", "command": _GUARD_CMD + "gh"}]}],
+        "Stop": [{"hooks": [{"type": "command", "command": _GUARD_CMD + "relay"}]}],
+    }
 
 
 class RenderError(Exception):
@@ -55,11 +70,6 @@ class Rendered:
 
 
 def render_committed(decl: Declaration) -> Rendered:
-    if decl.remotes_allowed is False:
-        raise RenderError(
-            "[publish] remotes_allowed = false needs RH's outbound hook, which this build doesn't "
-            "generate yet; RH won't report a control it doesn't generate (C6)"
-        )
     rows: list[Row] = []
     deny: list[str] = []
     deny_write: list[str] = []
@@ -69,6 +79,7 @@ def render_committed(decl: Declaration) -> Rendered:
         ("sandbox.failIfUnavailable", "true"),
         ("sandbox.allowUnsandboxedCommands", "false"),
         ("permissions.disableBypassPermissionsMode", '"disable"'),
+        ("disableAllHooks", "false"),
     ):
         rows.append(Row("floor", f"{key} = {value}", FLOOR))
 
@@ -93,9 +104,28 @@ def render_committed(decl: Declaration) -> Rendered:
         for host in decl.network_allow:
             _add(domains, rows, host, "[network] allow", PROXY, prefix="allowedDomains ")
         sandbox["network"] = {"allowedDomains": domains}
-    sandbox["filesystem"] = {"denyWrite": deny_write}
+    filesystem: dict = {"denyWrite": deny_write}
+    if decl.writable:
+        allow_write: list[str] = []
+        for path in decl.writable:
+            _add(allow_write, rows, path if path.startswith("~/") else f"./{path}", "[writable]", WIDENS,
+                 prefix="allowWrite ", note="must hold nothing that later runs outside the sandbox")
+        filesystem["allowWrite"] = allow_write
+    sandbox["filesystem"] = filesystem
 
-    settings = {"permissions": {"deny": deny, "disableBypassPermissionsMode": "disable"}, "sandbox": sandbox}
+    no_remotes = decl.remotes_allowed is False
+    rows.append(Row("[publish]" if decl.remotes_allowed is not None else "floor: outbound guard",
+                    "hook outbound" + (" --no-remotes" if no_remotes else ""), HOOK,
+                    note="refuses tag, release, remote and package publishing; a branch push "
+                         + ("is refused (no remotes)" if no_remotes else "asks")
+                         + ". Not caught: curl or wget to GitHub, web fetches, scripts, git aliases"))
+    rows.append(Row("floor: gh guard", "hook gh", HOOK,
+                    note="permits only gh api <REST path> (sanctioned writes) and gh auth status"))
+    rows.append(Row("floor: relay guard", "hook relay (Stop)", HOOK,
+                    note="blocks once when a driver's handoff line is relayed changed"))
+
+    settings = {"permissions": {"deny": deny, "disableBypassPermissionsMode": "disable"}, "sandbox": sandbox,
+                "disableAllHooks": False, "hooks": hooks(no_remotes)}
     return Rendered(settings, rows)
 
 

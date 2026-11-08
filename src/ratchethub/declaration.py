@@ -1,4 +1,4 @@
-"""Load and validate a project's declaration (docs/declaration-schema.md, schema version 1).
+"""Load and validate a project's declaration (docs/declaration-schema.md, schema versions 1 and 2).
 
 Validation is all-or-nothing: every error is collected and raised together, and nothing is
 returned unless the whole declaration is valid. Paths are checked against the filesystem
@@ -8,22 +8,25 @@ returned unless the whole declaration is valid. Paths are checked against the fi
 from __future__ import annotations
 
 import ipaddress
+import os
 import posixpath
 import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # the newest this build reads; version 1 is still accepted
+SCHEMA_VERSIONS = (1, 2)
 COMMITTED_NAME = "ratchethub.toml"
 LOCAL_NAME = "ratchethub.local.toml"
 
-COMMITTED_SECTIONS = {"ratchethub", "project", "protect", "network", "deny_command", "publish"}
+COMMITTED_SECTIONS = {"ratchethub", "project", "protect", "network", "deny_command", "publish", "writable"}
 LOCAL_SECTIONS = {"protect", "deny_command"}
 # Runtime settings keys. Setting them by declaration would bypass the generator's floor (C5).
 FLOOR_SECTIONS = {"sandbox", "permissions", "hooks"}
 # Planned for later schema versions (docs/change-protocol.md §5, docs/v1-scope.md §5).
-LATER_SECTIONS = {"exempt", "exception", "writable"}
+LATER_SECTIONS = {"exempt", "exception"}
+V2_SECTIONS = {"writable"}
 
 SECTION_KEYS = {
     "ratchethub": {"schema"},
@@ -32,7 +35,13 @@ SECTION_KEYS = {
     "network": {"allow"},
     "deny_command": {"pattern", "reason"},
     "publish": {"remotes_allowed"},
+    "writable": {"folders"},
 }
+
+# Folders that run code outside the sandbox, relative to the home folder (protocol §5). A writable
+# folder may not be one of these, inside one, or hold one.
+HOME_REFUSED = (".config", ".local/bin", ".claude", ".ssh", ".gnupg", ".bashrc", ".bash_profile", ".profile",
+                ".zshrc", ".zprofile", ".zshenv", ".bash_login", ".bash_logout", ".gitconfig", ".npmrc", ".pypirc")
 
 WILDCARDS = set("*?[")
 # Characters the runtime's rule syntax gives meaning to: a path holding one can't be written
@@ -63,6 +72,8 @@ class Declaration:
     network_allow: tuple[str, ...]
     deny_commands: tuple[DenyCommand, ...]
     remotes_allowed: bool | None
+    writable: tuple[str, ...] = ()  # project-relative, or starting `~/` (schema 2)
+    schema: int = SCHEMA_VERSION
 
 
 @dataclass(frozen=True)
@@ -73,7 +84,7 @@ class LocalDeclaration:
     deny_commands: tuple[DenyCommand, ...]
 
 
-def load_committed(root: Path) -> Declaration:
+def load_committed(root: Path, *, home: Path | None = None, path_env: str | None = None) -> Declaration:
     path = Path(root) / COMMITTED_NAME
     if not path.is_file():
         raise DeclarationError(COMMITTED_NAME, [f"{COMMITTED_NAME} not found in {root}"])
@@ -81,15 +92,14 @@ def load_committed(root: Path) -> Declaration:
     if data is None:
         raise DeclarationError(COMMITTED_NAME, errors)
 
-    _check_sections(data, COMMITTED_SECTIONS, "committed declaration", errors)
-
     header = data.get("ratchethub")
+    version = header.get("schema") if isinstance(header, dict) else None
     if not isinstance(header, dict):
         errors.append("[ratchethub] is required")
-    else:
-        version = header.get("schema")
-        if type(version) is not int or version != SCHEMA_VERSION:
-            errors.append(f"[ratchethub] schema must be the integer {SCHEMA_VERSION}, got {version!r}")
+    elif type(version) is not int or version not in SCHEMA_VERSIONS:
+        errors.append(f"[ratchethub] schema must be one of the integers {list(SCHEMA_VERSIONS)}, got {version!r}")
+    known = version if version in SCHEMA_VERSIONS else SCHEMA_VERSION
+    _check_sections(data, COMMITTED_SECTIONS, "committed declaration", errors, known)
 
     project = data.get("project")
     name = project.get("name") if isinstance(project, dict) else None
@@ -107,9 +117,12 @@ def load_committed(root: Path) -> Declaration:
         if not isinstance(remotes, bool):
             errors.append("[publish] remotes_allowed must be a boolean")
 
+    writable = _writable(data, Path(root), Path(home) if home else Path.home(),
+                         os.environ.get("PATH", "") if path_env is None else path_env, protect, errors)
+
     if errors:
         raise DeclarationError(COMMITTED_NAME, errors)
-    return Declaration(name, protect, network, deny, remotes)
+    return Declaration(name, protect, network, deny, remotes, writable, known)
 
 
 def load_local(root: Path) -> LocalDeclaration:
@@ -120,7 +133,7 @@ def load_local(root: Path) -> LocalDeclaration:
     data, errors = _parse(path)
     if data is None:
         raise DeclarationError(LOCAL_NAME, errors)
-    _check_sections(data, LOCAL_SECTIONS, "local declaration", errors)
+    _check_sections(data, LOCAL_SECTIONS, "local declaration", errors, SCHEMA_VERSION)
     protect = _folders(data, Path(root), allow_absolute=True, errors=errors)
     deny = _deny_commands(data, errors)
     if errors:
@@ -138,12 +151,12 @@ def _parse(path: Path) -> tuple[dict | None, list[str]]:
         return None, [f"{path.name} is not valid TOML: {exc}"]
 
 
-def _check_sections(data: dict, allowed: set[str], kind: str, errors: list[str]) -> None:
+def _check_sections(data: dict, allowed: set[str], kind: str, errors: list[str], version: int) -> None:
     for section, value in data.items():
         if section in FLOOR_SECTIONS:
             errors.append(f"[{section}] sets runtime settings directly; the floor is not declarable (C5)")
-        elif section in LATER_SECTIONS:
-            errors.append(f"[{section}] is not in schema version {SCHEMA_VERSION}")
+        elif section in LATER_SECTIONS or (section in V2_SECTIONS and version < 2):
+            errors.append(f"[{section}] is not in schema version {version}")
         elif section not in COMMITTED_SECTIONS:
             errors.append(f"unknown section [{section}]")
         elif section not in allowed:
@@ -220,6 +233,87 @@ def _folder(raw: object, root: Path, allow_absolute: bool, errors: list[str]) ->
         errors.append(f"{where} is not a folder")
         return None
     return norm
+
+
+# Floor paths a writable folder may not reach (protocol §5): self-protection and code-run paths.
+FLOOR_PATHS = (".claude", "ratchethub.toml", "ratchethub.local.toml", ".mcp.json", ".git")
+
+
+def _overlaps(a: str, b: str) -> bool:
+    return a == b or a.startswith(b.rstrip("/") + "/") or b.startswith(a.rstrip("/") + "/")
+
+
+def _writable(data: dict, root: Path, home: Path, path_env: str, protect: tuple[str, ...],
+              errors: list[str]) -> tuple[str, ...]:
+    section = data.get("writable")
+    if not isinstance(section, dict) or "folders" not in section:
+        return ()
+    folders = section["folders"]
+    if not isinstance(folders, list):
+        errors.append("[writable] folders must be an array of paths")
+        return ()
+    on_path = [posixpath.normpath(p) for p in path_env.split(os.pathsep) if p.startswith("/")]
+    out: list[str] = []
+    for raw in folders:
+        where = f"[writable] folder {raw!r}"
+        if not isinstance(raw, str) or not raw:
+            errors.append(f"{where} must be a string")
+            continue
+        if WILDCARDS & set(raw):
+            errors.append(f"{where} contains a wildcard; on Linux the runtime silently skips such a rule")
+            continue
+        if RULE_SPECIAL & set(raw) or any(ord(c) < 32 for c in raw):
+            errors.append(f"{where} contains a character the rule syntax treats specially")
+            continue
+        if raw.startswith("~/"):
+            rel = posixpath.normpath(raw[2:])
+            if rel in (".", "") or rel == ".." or rel.startswith("../") or rel.startswith("/"):
+                errors.append(f"{where} is the home folder itself or outside it; code there runs outside the sandbox")
+                continue
+            bad = [h for h in HOME_REFUSED if _overlaps(rel, h)]
+            if bad:
+                errors.append(f"{where} reaches ~/{bad[0]}, which runs code or holds credentials outside the sandbox")
+                continue
+            start, parts, norm = home, rel.split("/"), "~/" + rel
+            absolute = posixpath.join(str(home), rel)
+        elif raw.startswith("/") or raw.startswith("~"):
+            errors.append(f"{where} must be relative to the project root or start with ~/; no other absolute paths")
+            continue
+        else:
+            rel = posixpath.normpath(raw)
+            if rel == ".":
+                errors.append(f"{where} is the project root itself")
+                continue
+            if rel == ".." or rel.startswith("../"):
+                errors.append(f"{where} is outside the project")
+                continue
+            bad = [f for f in (*FLOOR_PATHS, *protect) if _overlaps(rel, f)]
+            if bad:
+                errors.append(f"{where} overlaps the protected path {bad[0]}")
+                continue
+            start, parts, norm = root, rel.split("/"), rel
+            absolute = posixpath.join(str(root), rel)
+        hits = [p for p in on_path if _overlaps(absolute, p)]
+        if hits:
+            errors.append(f"{where} overlaps {hits[0]}, a folder on PATH: code there runs outside the sandbox")
+            continue
+        current, ok = start, True
+        for part in parts:
+            current = current / part
+            if current.is_symlink():
+                errors.append(f"{where} passes through a symbolic link at {current}")
+                ok = False
+                break
+            if not current.exists():
+                errors.append(f"{where} does not exist")
+                ok = False
+                break
+        if ok and not current.is_dir():
+            errors.append(f"{where} is not a folder")
+            ok = False
+        if ok and norm not in out:
+            out.append(norm)
+    return tuple(out)
 
 
 def _network(data: dict, errors: list[str]) -> tuple[str, ...]:

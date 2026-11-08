@@ -33,7 +33,15 @@ from .generate import (
     sha,
     write_record,
 )
-from .render import CODE_RUN_DIRS, CODE_RUN_FILES, SELF_PROTECTED_DIRS, SELF_PROTECTED_FILES, render_committed, render_local
+from .render import (
+    CODE_RUN_DIRS,
+    CODE_RUN_FILES,
+    GUARD_PATH,
+    SELF_PROTECTED_DIRS,
+    SELF_PROTECTED_FILES,
+    render_committed,
+    render_local,
+)
 
 # The runtime write-protects these itself (seen in its sandbox configuration, 2026-11-08).
 MANAGED_PATHS = (Path("/etc/claude-code/managed-settings.json"), Path("/etc/claude-code/managed-settings.d"))
@@ -88,6 +96,7 @@ def verify_static(root: Path, *, claude_version: str, home: Path | None = None,
 
     records = _check_record(root, checks)
     _check_floor(sources, platform or _platform(), checks)
+    _check_hooks(root, sources, checks)
     _check_loosening(sources, checks)
     _check_write_allows(root, home, sources, checks)
     _check_rows_present(root, sources, checks)
@@ -107,7 +116,7 @@ def verify_static(root: Path, *, claude_version: str, home: Path | None = None,
             stale = f"last verified against Claude Code {verifies[-1].get('claude_code')}, now {claude_version}"
 
     hashes = {}
-    for name in (SETTINGS, SETTINGS_LOCAL, COMMITTED_NAME, LOCAL_NAME):
+    for name in (SETTINGS, SETTINGS_LOCAL, GUARD_PATH, COMMITTED_NAME, LOCAL_NAME):
         path = root / name
         hashes[name] = sha(path.read_bytes()) if path.exists() else None
     return Report(checks, [f"{s.scope}: {s.path}" for s in sources], claude_version, stale, hashes)
@@ -232,6 +241,41 @@ def _check_floor(sources: list[Source], platform: str, checks: list[Check]) -> N
                         f"{source.scope} limits the sandbox to {platforms}; this platform is {platform}"))
 
 
+def _hook_commands(data: dict) -> set[str]:
+    out = set()
+    hooks = data.get("hooks")
+    if isinstance(hooks, dict):
+        for matchers in hooks.values():
+            for m in matchers if isinstance(matchers, list) else []:
+                for h in (m.get("hooks") or []) if isinstance(m, dict) else []:
+                    if isinstance(h, dict) and isinstance(h.get("command"), str):
+                        out.add(h["command"])
+    return out
+
+
+def _check_hooks(root: Path, sources: list[Source], checks: list[Check]) -> None:
+    """RH's hooks are tripwires, but a tripwire switched off must still be reported."""
+    value, source = _effective(sources, "disableAllHooks")
+    checks.append(Check("floor:disableAllHooks", value is not True,
+                        f"hooks switched off by {source.scope} ({source.path})" if value is True
+                        else "hooks are not switched off"))
+    managed_only = [str(s.path) for s in sources if s.scope == "managed" and s.data.get("allowManagedHooksOnly") is True]
+    checks.append(Check("floor:allowManagedHooksOnly", not managed_only,
+                        f"only managed hooks run ({', '.join(managed_only)}), so RH's hooks don't"
+                        if managed_only else "project hooks may run"))
+    present = set().union(*(_hook_commands(s.data) for s in sources)) if sources else set()
+    try:
+        wanted = _hook_commands(render_committed(load_committed(root)).settings)
+    except Exception:  # reported by the record and rows checks
+        wanted = set()
+    missing = sorted(wanted - present)
+    guard = root / GUARD_PATH
+    if not guard.is_file():
+        missing.append(f"the guard file {GUARD_PATH}")
+    checks.append(Check("hooks", not missing, "missing: " + "; ".join(missing) if missing
+                        else "RH's three hooks are wired and the guard file is present"))
+
+
 LOOSENING_LISTS = ("sandbox.excludedCommands", "sandbox.network.allowUnixSockets")
 LOOSENING_TRUE = ("sandbox.network.allowAllUnixSockets", "sandbox.enableWeakerNestedSandbox",
                   "sandbox.enableWeakerNetworkIsolation")
@@ -332,7 +376,8 @@ def _check_rows_present(root: Path, sources: list[Source], checks: list[Check]) 
         checks.append(Check("rows", False, f"can't render the declaration: {exc}"))
         return
     merged = {key: [x for s in sources for x in (get(s.data, key) or [])]
-              for key in ("permissions.deny", "sandbox.filesystem.denyWrite", "sandbox.network.allowedDomains")}
+              for key in ("permissions.deny", "sandbox.filesystem.denyWrite", "sandbox.network.allowedDomains",
+                          "sandbox.filesystem.allowWrite")}
     missing = []
     for settings in (expected, expected_local):
         for key, values in merged.items():

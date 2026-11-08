@@ -54,7 +54,7 @@ def test_refuses_missing_ratchethub_section(tmp_path):
     refuse_committed(tmp_path, '[project]\nname = "p"\n', "[ratchethub] is required")
 
 
-@pytest.mark.parametrize("value", ["2", "0", '"1"', "true", "1.0"])
+@pytest.mark.parametrize("value", ["3", "0", '"1"', "true", "1.0"])
 def test_refuses_unknown_or_mistyped_schema(tmp_path, value):
     refuse_committed(tmp_path, f'[ratchethub]\nschema = {value}\n[project]\nname = "p"\n', "schema")
 
@@ -78,6 +78,12 @@ def test_refuses_an_attempt_to_set_the_floor(tmp_path, section):
 @pytest.mark.parametrize("section", ["[[exempt]]", "[[exception]]", "[writable]"])
 def test_refuses_sections_not_in_schema_1(tmp_path, section):
     refuse_committed(tmp_path, HEADER + f'{section}\nx = "y"\n', "not in schema version 1")
+
+
+@pytest.mark.parametrize("section", ["[[exempt]]", "[[exception]]"])
+def test_refuses_sections_not_in_schema_2(tmp_path, section):
+    refuse_committed(tmp_path, HEADER.replace("schema = 1", "schema = 2") + f'{section}\nx = "y"\n',
+                     "not in schema version 2")
 
 
 def test_refuses_unknown_section(tmp_path):
@@ -287,3 +293,81 @@ reason = "GraphQL needs credentials this agent must not hold"
 [publish]
 remotes_allowed = true
 """
+
+
+# --- [writable] (schema 2) ----------------------------------------------------------------------------
+
+V2 = HEADER.replace("schema = 1", "schema = 2")
+
+
+def writable(root: Path, home: Path, folders: str, path_env: str = "/usr/bin:/bin"):
+    write(root, "ratchethub.toml", V2 + f"[writable]\nfolders = {folders}\n")
+    return load_committed(root, home=home, path_env=path_env)
+
+
+@pytest.fixture
+def home(tmp_path):
+    h = tmp_path / "home"
+    for d in (".npm", ".config/x", ".local/bin", ".claude", ".ssh", "bin", "cache"):
+        (h / d).mkdir(parents=True)
+    return h
+
+
+@pytest.fixture
+def proj(tmp_path):
+    p = tmp_path / "proj"
+    for d in ("build/cache", "data", ".claude", ".git/hooks"):
+        (p / d).mkdir(parents=True)
+    return p
+
+
+@pytest.mark.parametrize("folders, needle", [
+    ('["~"]', "must be relative"), ('["~/"]', "home folder itself"), ('["~/."]', "home folder itself"),
+    ('["~/../x"]', "outside it"), ('["~bob/x"]', "must be relative"), ('["/opt/x"]', "no other absolute"),
+    ('["~/.config"]', "~/.config"), ('["~/.config/x"]', "~/.config"), ('["~/.local"]', "~/.local/bin"),
+    ('["~/.local/bin"]', "~/.local/bin"), ('["~/.claude"]', "~/.claude"), ('["~/.ssh"]', "~/.ssh"),
+    ('["."]', "project root itself"), ('["../x"]', "outside the project"), ('[".claude"]', "overlaps"),
+    ('[".git"]', "overlaps"), ('[".git/hooks"]', "overlaps"), ('["ratchethub.toml"]', "overlaps"),
+    ('["~/.npm/*"]', "wildcard"), ('["~/a(b"]', "specially"), ('["~/missing"]', "does not exist"),
+    ('"~/.npm"', "array"), ("[3]", "must be a string"),
+])
+def test_writable_refusals(proj, home, folders, needle):
+    with pytest.raises(DeclarationError) as info:
+        writable(proj, home, folders)
+    assert any(needle in e for e in info.value.errors), info.value.errors
+
+
+def test_writable_refuses_a_folder_on_path(proj, home):
+    with pytest.raises(DeclarationError, match="on PATH"):
+        writable(proj, home, '["~/bin"]', path_env=f"/usr/bin:{home}/bin")
+
+
+def test_writable_refuses_an_ancestor_of_a_folder_on_path(proj, home):
+    with pytest.raises(DeclarationError, match="on PATH"):
+        writable(proj, home, '["build"]', path_env=f"/usr/bin:{proj}/build/cache")
+
+
+def test_writable_refuses_overlap_with_protect(proj, home):
+    write(proj, "ratchethub.toml", V2 + '[protect]\nfolders = ["data"]\n[writable]\nfolders = ["data"]\n')
+    with pytest.raises(DeclarationError, match="overlaps the protected path data"):
+        load_committed(proj, home=home, path_env="")
+
+
+def test_writable_refuses_a_symlink(proj, home, tmp_path):
+    (home / "link").symlink_to(home / "cache")
+    with pytest.raises(DeclarationError, match="symbolic link"):
+        writable(proj, home, '["~/link"]')
+
+
+def test_writable_is_not_in_the_local_file(proj):
+    refuse_local(proj, '[writable]\nfolders = ["build"]\n', "not allowed in a local declaration")
+
+
+def test_writable_accepts_home_and_project_folders(proj, home):
+    d = writable(proj, home, '["~/.npm", "build/cache", "~/.npm/", "./build/cache"]')
+    assert d.writable == ("~/.npm", "build/cache") and d.schema == 2
+
+
+def test_schema_1_still_loads(proj):
+    write(proj, "ratchethub.toml", HEADER)
+    assert load_committed(proj).schema == 1
