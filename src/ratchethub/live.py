@@ -41,7 +41,9 @@ RULE_TEXTS = ("denied by your permission settings", "Permission to use", "permis
 HOOK_TEXT = "RatchetHub"
 PASSING = ("ENFORCED", "HOOK FIRES", "CONTROL LANDS")
 
-Runner = Callable[[list[str], Path], tuple[str, str, int | None]]
+# (argv, cwd, prompt) -> (stdout, stderr, exit code). The prompt goes on stdin: `--add-dir` takes
+# every argument after it, so a prompt at the end of argv is read as one more folder.
+Runner = Callable[[list[str], Path, str], tuple[str, str, int | None]]
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,11 @@ class LiveResult:
     hashes: dict[str, str | None] = field(default_factory=dict)
     sessions: list[dict] = field(default_factory=list)
     scratch: str = ""
+
+    @property
+    def not_started(self) -> list[str]:
+        """Sessions that never reached the runtime's start event: nothing was measured in them."""
+        return [s["label"] for s in self.sessions if s.get("started_mode") is None]
 
     @property
     def ok(self) -> bool:
@@ -144,9 +151,9 @@ def _prompt(items: list[tuple[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def claude_runner(argv: list[str], cwd: Path) -> tuple[str, str, int | None]:
+def claude_runner(argv: list[str], cwd: Path, prompt: str) -> tuple[str, str, int | None]:
     try:
-        proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=900)
+        proc = subprocess.run(argv, cwd=cwd, input=prompt, capture_output=True, text=True, timeout=900)
         return proc.stdout, proc.stderr, proc.returncode
     except subprocess.TimeoutExpired as exc:
         dec = lambda b: b.decode("utf-8", "replace") if isinstance(b, bytes) else (b or "")
@@ -185,8 +192,7 @@ def _session(copy: Path, items: list[tuple[str, str]], mode: str, add_dirs: list
             "--no-session-persistence", "--output-format", "stream-json", "--verbose", "--permission-mode", mode]
     for d in add_dirs:
         argv += ["--add-dir", d]
-    argv.append(_prompt(items))
-    stdout, stderr, rc = runner(argv, copy)
+    stdout, stderr, rc = runner(argv, copy, _prompt(items))
     logdir.mkdir(parents=True, exist_ok=True)
     (logdir / f"{label}.jsonl").write_text(stdout)
     (logdir / f"{label}.stderr").write_text(stderr)

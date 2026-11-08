@@ -123,11 +123,15 @@ def cmd_live(a) -> int:
         print(f"  {v.verdict:<13} {v.target}\n      governed: {v.governed[:140]}\n      baseline: {v.baseline[:140]}")
     for s in result.sessions:
         print(f"  session {s['label']}: started in {s['started_mode']}, exit {s['exit_code']}")
+        if s["started_mode"] is None:
+            print(f"      did not start: {(s.get('stderr') or '(no stderr)').splitlines()[0][:200]}")
     if result.residue:
         print("RESIDUE (could not delete): " + ", ".join(result.residue))
     print(f"evidence: {scratch}")
     print("OK" if result.ok else "FAILED")
-    if a.record:
+    if a.record and result.not_started:
+        print("not recorded: a session never started, so nothing was measured")
+    elif a.record:
         record_live(a.root, result, now=_now())
         print("recorded the live verify entry")
     return 0 if result.ok else 1

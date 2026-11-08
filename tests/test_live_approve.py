@@ -29,11 +29,14 @@ class FakeRuntime:
         self.breaks = breaks
         self.calls = []
 
-    def __call__(self, argv, cwd):
+    def __call__(self, argv, cwd, stdin=""):
         self.calls.append((argv, cwd))
+        prompt = self._prompt(argv, stdin)
+        if prompt is None:
+            return "", "Error: Input must be provided either through stdin or as a prompt argument when using --print", 1
         governed = (Path(cwd) / ".claude" / "settings.json").exists()
         events = [{"type": "system", "subtype": "init", "permissionMode": argv[argv.index("--permission-mode") + 1]}]
-        for n, line in enumerate(argv[-1].splitlines()):
+        for n, line in enumerate(prompt.splitlines()):
             m = ITEM.match(line)
             if not m:
                 continue
@@ -48,6 +51,27 @@ class FakeRuntime:
                 {"type": "tool_result", "tool_use_id": uid, "is_error": err, "content": text}]}})
         events.append({"type": "system", "subtype": "permission_denied", "message": "a string, not a dict"})
         return "\n".join(json.dumps(e) for e in events) + "\nnot json\n", "", 0
+
+    @staticmethod
+    def _prompt(argv, stdin):
+        """Parse argv the way the real CLI does: a variadic option (`--add-dir <directories...>`)
+        takes every following argument that isn't an option, so only what's left is the prompt."""
+        variadic, takes_one = {"--add-dir"}, {"--model", "--max-turns", "--output-format", "--permission-mode"}
+        positional, i = [], 1
+        while i < len(argv):
+            tok = argv[i]
+            if tok in variadic:
+                i += 1
+                while i < len(argv) and not argv[i].startswith("-"):
+                    i += 1
+                continue
+            if tok in takes_one:
+                i += 2
+                continue
+            if not tok.startswith("-"):
+                positional.append(tok)
+            i += 1
+        return positional[0] if positional else (stdin or None)
 
     def _act(self, kind, arg, governed, cwd):
         if arg.startswith(("git push", "gh ")):
@@ -352,3 +376,28 @@ def test_portable_replaces_whole_paths_only(tmp_path):
     nested = tmp_path / "h" / "repo"
     nested.mkdir(parents=True)
     assert portable(f"{nested}/y", nested, home=tmp_path / "h") == "./y", "the repository wins over home"
+
+
+def test_a_session_that_never_starts_is_named_and_fails(project, tmp_path):
+    """The first real run: the prompt was swallowed by `--add-dir`, both sessions exited before
+    the start event, and nothing was measured. That must read as a non-start, never as verdicts."""
+    dead = lambda argv, cwd, prompt: ("", "Error: Input must be provided", 1)
+    result = live.run_live(project, tmp_path / "scratch", claude_version="v", runner=dead)
+    assert result.not_started == ["governed", "baseline"] and not result.ok
+
+
+def test_the_prompt_survives_the_add_dir_list(project, tmp_path):
+    estate = tmp_path / "estate"
+    estate.mkdir()
+    (project / "ratchethub.local.toml").write_text(f'[protect]\nfolders = ["{estate}"]\n')
+    generate(project, claude_version="v", now="t0")
+    rt = FakeRuntime()
+    live.run_live(project, tmp_path / "scratch", claude_version="v", runner=rt)
+    argv, _ = rt.calls[0]
+    assert "--add-dir" in argv, "the test project has an absolute folder, so --add-dir is in play"
+    assert FakeRuntime._prompt(argv + ["the prompt"], "") is None, "a trailing prompt is eaten, as in the CLI"
+
+
+def test_the_real_runner_sends_the_prompt_on_stdin(tmp_path):
+    out, _, rc = live.claude_runner(["sh", "-c", "cat"], tmp_path, "the prompt")
+    assert (out, rc) == ("the prompt", 0)
