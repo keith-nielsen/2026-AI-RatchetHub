@@ -151,6 +151,11 @@ def cmd_report(a) -> int:
               + (f"\n{'':<24}   reason: {r.reason}" if r.reason else "")
               + (f"\n{'':<24}   note: {r.note}" if r.note else ""))
     print("A strength is the class a row belongs to. Only a passing live verify entry shows it holds.")
+    from .residue import RULES
+
+    print("\nRESIDUE: rules no control here reaches (not controls; nothing enforces them)")
+    for i, (title, _) in enumerate(RULES, 1):
+        print(f"  {i}. {title}")
     return 0
 
 

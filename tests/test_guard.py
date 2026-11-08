@@ -278,3 +278,15 @@ def test_guard_is_standalone():
     names = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
     names |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
     assert names - {"__future__"} <= set(_sys.stdlib_module_names), names
+
+
+def test_residual_rules_doc_matches_the_code():
+    import re
+    from pathlib import Path
+
+    from ratchethub.residue import RULES
+
+    doc = (Path(__file__).parents[1] / "docs" / "residual-rules.md").read_text()
+    assert re.findall(r"^## \d+\. (.+)$", doc, re.M) == [t for t, _ in RULES]
+    for _, body in RULES:
+        assert body in doc.replace("\n", " ")

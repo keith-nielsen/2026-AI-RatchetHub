@@ -1,6 +1,8 @@
 # The change protocol
 
-> **Status:** signed off by the operator, 2026-11-08; its three decisions ruled (§9, 2026-10-25). Details charter §3 (declare → generate → verify →
+> **Status:** signed off by the operator, 2026-11-08; its three decisions ruled (§9, 2026-10-25).
+> **Amendment drafted 2026-11-08, awaiting the operator's sign-off (§10):** who records a verify
+> entry, what Approve requires, the guard file, and the command for each step. Details charter §3 (declare → generate → verify →
 > approve), adds standing exceptions (closing the gap in charter §4), and records where the floor
 > lives. Runtime facts come from the Claude Code documentation fetched 2026-10-24, read against
 > Claude Code v2.1.310. A fact marked **unprobed** is documented but not yet shown by a live probe,
@@ -17,10 +19,11 @@ these files:
 | `ratchethub.local.toml` | a person (Declare) | no |
 | `.claude/settings.json` | RH (Generate), whole file | yes |
 | `.claude/settings.local.json` | RH (Generate), its own keys only (schema §6, ruling 2) | no |
+| `.claude/hooks/ratchethub_guard.py` | RH (Generate), a copy of its hook file | yes |
 | `.claude/ratchethub-record.json` | RH (each step), for the committed half | yes |
 | `.claude/ratchethub-record.local.json` | RH (each step), for the local half | no |
 
-All six sit under the floor's self-protection (schema §2), so the agent can write none of them,
+All seven sit under the floor's self-protection (schema §2), so the agent can write none of them,
 by Bash or by the file tools.
 
 ## 2. Who runs each step
@@ -29,8 +32,8 @@ by Bash or by the file tools.
 | --- | --- | --- | --- |
 | Declare | a person | the declaration | (no tool; Generate validates) |
 | Generate | a person | the generated files, the record | the declaration fails validation; a generated file differs from the record (drift); `ratchethub.local.toml` isn't ignored by git |
-| Verify | a person or the agent (static part); a person (live part) | the record's verify entry | the generated files differ from the record; the record has no generate entry for the current declaration |
-| Approve | a person | the record's approval entry | the record has no passing verify entry for the files now on disk |
+| Verify | static checks: a person or the agent (`ratchethub verify`, writes nothing); recording them: a person (`ratchethub verify --record`); live checks: a person (`ratchethub live`) | the record's verify entry (recording only) | the generated files differ from the record; the record has no generate entry for the current declaration; a check fails its broken inputs (the self-test) |
+| Approve | a person (`ratchethub approve --who`) | the record's approval entry | the record has no passing, unstale static **and** live verify entry since the last Generate for the files now on disk (static only if the person says so, recorded as such) |
 
 **The agent can't run Generate or Approve, by construction:** both write under `.claude/`, which
 the floor denies to the agent in both channels. The agent's part in a change is to **propose** it:
@@ -88,7 +91,8 @@ takes over a file it didn't write.
 **Static checks** read the **effective** settings: every file the runtime merges (user, project,
 local, and managed if present), not only RH's own. They confirm the floor holds in the merged result,
 each declared row is present, nothing outside RH's keys loosens a row, and the generated files match
-the record. Static checks write nothing but the verify entry, so the agent may run them.
+the record. Static checks write nothing, so the agent may run them. Recording their result appends
+to the record under `.claude/`, which the floor denies to the agent, so a person records it.
 
 **Live checks** run one headless session with the generated settings and one with no settings (the
 baseline), attempt each protected write in both channels (Bash and the file tools), and judge by the
@@ -109,7 +113,9 @@ declaration hasn't changed.
 
 A person reads RH's report (each row with its strength, and each live result against its baseline)
 and approves. Approve records the approval and refuses if anything has changed since the verify
-entry it approves.
+entries it approves. It needs both a static and a live verify entry recorded since the last
+Generate. A person may approve on the static entry alone; the approval then records
+`static_only`, and RH reports no row as shown to hold (charter C6).
 
 ### When the route runs
 
@@ -352,3 +358,20 @@ Facts the probes surfaced, not in the claims above:
 3. **Where the floor lives** (§6). **Ruled 2026-10-25: as recommended.** The recommendation: the project file for v1, reported as detective
    against local changes. The managed placement is recorded as considered and declined for v1, and
    the `--settings` launcher as the first candidate after v1.
+
+## 10. Amendment (drafted 2026-11-08, awaiting sign-off)
+
+Found while building the steps. Each brings this text level with what the code does; none loosens
+anything.
+
+1. **Recording a static verify is a person's step.** §2 said the agent may run static Verify, which
+   writes the verify entry. The record is under `.claude/`, which the floor denies to the agent, so
+   the two are split: `ratchethub verify` checks and writes nothing; `ratchethub verify --record`
+   appends the entry, run by a person.
+2. **Approve needs a live verify entry too,** or an explicit static-only approval that says so. The
+   charter (C6) reports a row as enforced only after a live probe, so an approval that rests on
+   static checks alone must say it does.
+3. **The guard file is a governed file** (§1): `.claude/hooks/ratchethub_guard.py`, written by
+   Generate, hashed in the record, and drift when edited.
+4. **Verify refuses to report when its self-test fails:** each check runs against its broken inputs
+   first (§4, "A check is trusted only after it has failed on a broken input").
