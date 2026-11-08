@@ -156,6 +156,23 @@ equivalents through `gh api`). `remotes_allowed = false` also refuses a branch p
 branch push asks. **It doesn't catch** `curl` or `wget` to GitHub's API, the agent's web fetch tool,
 a script, a git alias, or a command assembled from variables at run time.
 
+### `[github]`: the declared platform state (schema 2)
+
+Read by RH's GitHub half, never rendered into settings. v1 scope §4 left open whether this lives
+here or in a file of its own; it lives here (C4: a project plugs in through one declaration).
+
+| Field | Type | Used by |
+| --- | --- | --- |
+| `default_branch` | string, required | the drivers (the base) and the reconciler |
+| `required_checks` | array of check names | the reconciler: compared with the branch's required status checks |
+| `rulesets` | array of project-relative `.json` files, one exported ruleset each | the reconciler: compared by content, never by timestamps; an undeclared ruleset on GitHub is drift |
+| `secret_scanning`, `push_protection` | booleans | the reconciler. GitHub shows them only to an admin, so an anonymous read reports them **unmeasured**, and coverage depends on repository type and plan |
+| `preflight` | array of commands | the preflight, run before every push, sandboxed like any agent command |
+| `[[github.labels]]` | `name`, `color` (six hex digits), `description` | the reconciler |
+
+The reconciler reports and never fixes. A ruleset change is a person's: RH prepares the whole
+ruleset with one field changed, because a ruleset write replaces the entire rule list.
+
 ## 4. What the local file may contain
 
 `ratchethub.local.toml` may only **add** restrictions, because the runtime ranks
@@ -228,7 +245,8 @@ folders = ["/srv/shared-datasets"]
 **Drafted 2026-11-08, awaiting the operator's sign-off.** One addition and a catch-up:
 
 1. **Added: `[writable]`** (§3), as ruled in v1 scope §5, decision 1. `[[exception]]` moves to
-   schema 3.
+   schema 3. **Added: `[github]`** (§3), the declared platform state v1 scope §4 said would be
+   designed with the build.
 2. **Stated: the hooks and `disableAllHooks` are part of the floor** (§2), and `[publish]` is now
    enforced (the generator refused `remotes_allowed = false` until the hook existed).
 3. **Stated: refusals the generator already made** but version 1 didn't list: the rule-special
