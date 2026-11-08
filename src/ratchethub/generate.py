@@ -74,39 +74,41 @@ def generate(root: Path, *, claude_version: str, now: str, adopt: bool = False) 
         "sandbox.filesystem.denyWrite": local_out.settings["sandbox"]["filesystem"]["denyWrite"],
     }
 
-    records = _read_records(root)
+    records = read_records(root)
     notes: list[str] = []
     if records is None:
         notes += _first_run_checks(root, committed.settings, new_local_keys, adopt)
     else:
-        _drift_checks(root, *records)
+        reasons = drift_reasons(root, *records)
+        if reasons:
+            raise GenerateError(reasons)
 
     # --- write -------------------------------------------------------------------------------------
     (root / ".claude").mkdir(exist_ok=True)
     _atomic_write(root / SETTINGS, settings_bytes)
     _write_local_keys(root / SETTINGS_LOCAL, new_local_keys)
 
-    hashes = {SETTINGS: _sha(settings_bytes), SETTINGS_LOCAL: _keys_hash(rh_local_keys(root / SETTINGS_LOCAL))}
+    hashes = {SETTINGS: sha(settings_bytes), SETTINGS_LOCAL: keys_hash(rh_local_keys(root / SETTINGS_LOCAL))}
     local_decl = root / LOCAL_NAME
     common = {"step": "generate", "at": now, "ratchethub": __version__, "schema": SCHEMA_VERSION,
               "claude_code": claude_version}
-    committed_entry = {**common, "declaration": _sha((root / COMMITTED_NAME).read_bytes()),
+    committed_entry = {**common, "declaration": sha((root / COMMITTED_NAME).read_bytes()),
                        "files": {SETTINGS: hashes[SETTINGS]}, "adopted": records is None and adopt}
-    local_entry = {**common, "declaration": _sha(local_decl.read_bytes()) if local_decl.exists() else None,
+    local_entry = {**common, "declaration": sha(local_decl.read_bytes()) if local_decl.exists() else None,
                    "files": {SETTINGS_LOCAL: hashes[SETTINGS_LOCAL]}}
     old_committed, old_local = records if records is not None else ({"entries": []}, {"entries": []})
-    _write_record(root / COMMITTED_RECORD, old_committed, committed_entry)
-    _write_record(root / LOCAL_RECORD, old_local, local_entry)
+    write_record(root / COMMITTED_RECORD, old_committed, committed_entry)
+    write_record(root / LOCAL_RECORD, old_local, local_entry)
 
     return GenerateResult(hashes, committed.rows + local_out.rows, notes)
 
 
 def rh_local_keys(path: Path) -> dict[str, list]:
     """RH's keys of `.claude/settings.local.json`; an absent file or key reads as empty."""
-    data = _read_json(path) if path.exists() else {}
+    data = read_json(path) if path.exists() else {}
     if data is None:
         raise GenerateError([f"{path.name} is not valid JSON"])
-    return {key: list(_get(data, key) or []) for key in LOCAL_RH_KEYS}
+    return {key: list(get(data, key) or []) for key in LOCAL_RH_KEYS}
 
 
 # --- preconditions -------------------------------------------------------------------------------
@@ -130,7 +132,8 @@ def _check_git(root: Path) -> None:
         raise GenerateError(reasons)
 
 
-def _read_records(root: Path) -> tuple[dict, dict] | None:
+def read_records(root: Path) -> tuple[dict, dict] | None:
+    """Both halves of the record, or None when neither exists. Raises GenerateError otherwise."""
     committed_path, local_path = root / COMMITTED_RECORD, root / LOCAL_RECORD
     if not committed_path.exists() and not local_path.exists():
         return None
@@ -144,7 +147,7 @@ def _read_records(root: Path) -> tuple[dict, dict] | None:
         raise GenerateError(reasons)
     out = []
     for path in (committed_path, local_path):
-        data = _read_json(path)
+        data = read_json(path)
         if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
             raise GenerateError([f"{path.name}: the record is not readable"])
         if not any(isinstance(e, dict) and e.get("step") == "generate" for e in data["entries"]):
@@ -157,13 +160,13 @@ def _first_run_checks(root: Path, new_settings: dict, new_local_keys: dict, adop
     reasons, notes = [], []
     settings_path = root / SETTINGS
     if settings_path.exists():
-        existing = _read_json(settings_path)
+        existing = read_json(settings_path)
         if not isinstance(existing, dict):
             raise GenerateError([f"{SETTINGS} exists and is not valid JSON"])
         if not adopt:
             raise GenerateError([f"{SETTINGS} exists and RH has no record of writing it; pass adopt to take it over"])
         for key in RESTRICTION_KEYS:
-            lost = _lost(_get(existing, key), _get(new_settings, key))
+            lost = _lost(get(existing, key), get(new_settings, key))
             if lost:
                 reasons.append(f"adopting {SETTINGS} would drop {key} entries {lost}; declare them first")
         for key in sorted(_leaf_keys(existing) - _leaf_keys(new_settings)):
@@ -183,28 +186,27 @@ def _first_run_checks(root: Path, new_settings: dict, new_local_keys: dict, adop
     return notes
 
 
-def _drift_checks(root: Path, committed_record: dict, local_record: dict) -> None:
+def drift_reasons(root: Path, committed_record: dict, local_record: dict) -> list[str]:
     reasons = []
-    expected = _last_generate(committed_record)["files"].get(SETTINGS)
+    expected = last_generate(committed_record)["files"].get(SETTINGS)
     path = root / SETTINGS
-    actual = _sha(path.read_bytes()) if path.exists() else None
+    actual = sha(path.read_bytes()) if path.exists() else None
     if actual != expected:
         what = "is missing" if actual is None else "differs from RH's last output"
         reasons.append(f"drift: {SETTINGS} {what}. Restore it from git, or move the change into "
                        f"{COMMITTED_NAME} and restore, then run Generate again")
-    expected_local = _last_generate(local_record)["files"].get(SETTINGS_LOCAL)
-    if _keys_hash(rh_local_keys(root / SETTINGS_LOCAL)) != expected_local:
+    expected_local = last_generate(local_record)["files"].get(SETTINGS_LOCAL)
+    if keys_hash(rh_local_keys(root / SETTINGS_LOCAL)) != expected_local:
         reasons.append(f"drift: RH's keys in {SETTINGS_LOCAL} ({', '.join(LOCAL_RH_KEYS)}) differ from RH's last "
                        f"output. Move the change into {LOCAL_NAME}, undo it in the file, then run Generate again")
-    if reasons:
-        raise GenerateError(reasons)
+    return reasons
 
 
 # --- helpers -------------------------------------------------------------------------------------
 
 
 def _write_local_keys(path: Path, keys: dict[str, list]) -> None:
-    data = _read_json(path) if path.exists() else {}
+    data = read_json(path) if path.exists() else {}
     if data is None:
         raise GenerateError([f"{SETTINGS_LOCAL} is not valid JSON"])
     for key, value in keys.items():
@@ -214,12 +216,12 @@ def _write_local_keys(path: Path, keys: dict[str, list]) -> None:
         _atomic_write(path, (json.dumps(data, indent=2) + "\n").encode("utf-8"))
 
 
-def _write_record(path: Path, record: dict, entry: dict) -> None:
+def write_record(path: Path, record: dict, entry: dict) -> None:
     record = {**record, "entries": [*record["entries"], entry]}
     _atomic_write(path, (json.dumps(record, indent=2) + "\n").encode("utf-8"))
 
 
-def _last_generate(record: dict) -> dict:
+def last_generate(record: dict) -> dict:
     return [e for e in record["entries"] if isinstance(e, dict) and e.get("step") == "generate"][-1]
 
 
@@ -229,22 +231,22 @@ def _atomic_write(path: Path, data: bytes) -> None:
     os.replace(tmp, path)
 
 
-def _read_json(path: Path):
+def read_json(path: Path):
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
 
 
-def _sha(data: bytes) -> str:
+def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _keys_hash(keys: dict) -> str:
-    return _sha(json.dumps(keys, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+def keys_hash(keys: dict) -> str:
+    return sha(json.dumps(keys, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
 
-def _get(data: dict, dotted: str):
+def get(data: dict, dotted: str):
     for part in dotted.split("."):
         if not isinstance(data, dict) or part not in data:
             return None
