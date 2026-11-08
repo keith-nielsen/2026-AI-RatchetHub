@@ -2,7 +2,8 @@
 
 > **Status:** signed off by the operator, 2026-11-08; its three decisions ruled (§9, 2026-10-25).
 > **Amendment drafted 2026-11-08, awaiting the operator's sign-off (§10):** who records a verify
-> entry, what Approve requires, the guard file, and the command for each step. Details charter §3 (declare → generate → verify →
+> entry, what Approve requires, the guard file, the command for each step, and how live Verify
+> runs (from RH's first live Verify of itself). Details charter §3 (declare → generate → verify →
 > approve), adds standing exceptions (closing the gap in charter §4), and records where the floor
 > lives. Runtime facts come from the Claude Code documentation fetched 2026-10-24, read against
 > Claude Code v2.1.310. A fact marked **unprobed** is documented but not yet shown by a live probe,
@@ -375,3 +376,48 @@ anything.
    Generate, hashed in the record, and drift when edited.
 4. **Verify refuses to report when its self-test fails:** each check runs against its broken inputs
    first (§4, "A check is trusted only after it has failed on a broken input").
+
+The following were found on RH's first live Verify of its own repository (2026-11-08, Claude Code
+2.1.319, Linux, auto mode). They define how live Verify runs; none loosens the floor.
+
+5. **The prompt goes on stdin.** `--add-dir <directories...>` takes every argument after it, so a
+   prompt placed last on the command line is read as one more folder, and the session exits before
+   it starts (first run: both sessions, nothing measured).
+6. **A session that never starts measured nothing.** Live Verify names it with its error and does
+   not record the run.
+7. **The classifier is kept out of the measurement, not just discounted** (§5, "The auto mode
+   classifier is not part of the floor"). On the second run it refused every governed Bash probe
+   before the sandbox saw it, so those rows were inconclusive. The documentation gives two reasons
+   (permission-modes, "How the classifier evaluates actions" and "Protected paths"): with
+   server-side review, sandboxed commands wait for the classifier; and a write the runtime
+   recognises in one of its own protected directories (`.claude`, `.git` and others) goes to the
+   classifier even when an allow rule matches. Both sessions therefore run with:
+   - `CLAUDE_CODE_AUTO_MODE_SERVER=0`, which turns server-side review off;
+   - an exact allow rule (`--allowedTools`) for each Bash probe command, never a wildcard;
+   - inside the runtime's protected directories, a probe that writes through an interpreter
+     (`python3 -c`), which the runtime doesn't trace as a write. That is the case the sandbox
+     exists for: code the agent runs.
+
+   None of these can let a governed write through. Deny rules and hooks outrank an allow rule, and
+   the floor forbids the unsandboxed retry that an allow rule would otherwise approve. Both
+   sessions get the same flags, rules and folders, so the baseline still shows the write lands
+   without the floor.
+8. **The committed record never names the machine.** Every entry bound for it passes through one
+   function that writes each absolute local protected folder as `<local folder N>`, the repository
+   as `.`, the home folder as `~` and the live run's scratch folder as `<scratch>`. The local record
+   keeps the real paths. The committed record is published with the repository (charter C1).
+
+**Result of the third run** (2026-11-08T16:09:16Z), recorded and then approved:
+
+| Row | Governed session | Baseline |
+| --- | --- | --- |
+| project root, Bash and file tools (controls) | landed | landed |
+| `.claude/`, Bash | refused by the sandbox (`Read-only file system`) | landed |
+| `.claude/`, file tools | refused by permission rule | landed |
+| `.git/hooks/`, file tools | refused by permission rule | landed |
+| two local protected folders, Bash | refused by the sandbox (`Read-only file system`) | landed |
+| two local protected folders, file tools | refused by permission rule | landed |
+| outbound guard (`git push --tags`) | refused by the hook | ran, failed on no remote |
+| `gh` guard (`gh pr`) | refused by the hook | ran, failed on no remote |
+
+No probe file was left behind. The two earlier runs stay in the record as failed entries.
