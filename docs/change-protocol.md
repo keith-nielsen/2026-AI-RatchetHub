@@ -1,6 +1,6 @@
 # The change protocol
 
-> **Status:** draft; its three decisions ruled (§9, 2026-10-25), the whole not yet signed off. Details charter §3 (declare → generate → verify →
+> **Status:** signed off by the operator, 2026-11-08; its three decisions ruled (§9, 2026-10-25). Details charter §3 (declare → generate → verify →
 > approve), adds standing exceptions (closing the gap in charter §4), and records where the floor
 > lives. Runtime facts come from the Claude Code documentation fetched 2026-10-24, read against
 > Claude Code v2.1.310. A fact marked **unprobed** is documented but not yet shown by a live probe,
