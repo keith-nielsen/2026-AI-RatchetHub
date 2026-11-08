@@ -1,0 +1,10 @@
+[project]
+name = "ratchethub"
+version = "0.0.1"
+description = "Locks down a project for an AI coding agent: declare what to protect, generate the controls."
+requires-python = ">=3.11"  # tomllib
+dependencies = []
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
