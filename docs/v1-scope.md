@@ -1,7 +1,7 @@
 # RatchetHub v1 scope
 
-> **Status:** draft, 2026-11-08; its two decisions ruled (§5, 2026-11-08), the whole not yet signed
-> off. Lists what RatchetHub (RH) v1 contains, what it
+> **Status:** signed off by the operator, 2026-11-08; its two decisions ruled (§5, 2026-11-08). A
+> change to this scope goes through the change protocol. Lists what RatchetHub (RH) v1 contains, what it
 > leaves out, and when it counts as done. The properties come from `CHARTER.md`, the declaration from
 > `docs/declaration-schema.md` and the route from `docs/change-protocol.md`; this list cites them
 > and doesn't restate them.
