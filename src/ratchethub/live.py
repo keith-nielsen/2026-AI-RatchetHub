@@ -32,7 +32,7 @@ from typing import Callable
 
 from . import __version__
 from .declaration import COMMITTED_NAME, LOCAL_NAME, load_committed, load_local
-from .generate import COMMITTED_RECORD, LOCAL_RECORD, SETTINGS, SETTINGS_LOCAL, read_records, sha, write_record
+from .generate import COMMITTED_RECORD, LOCAL_RECORD, SETTINGS, SETTINGS_LOCAL, read_records, replace_paths, sha, write_record
 from .render import CODE_RUN_DIRS, GUARD_PATH, SELF_PROTECTED_DIRS
 
 MARK = "rh-live-probe"
@@ -70,6 +70,7 @@ class LiveResult:
     claude_code: str
     hashes: dict[str, str | None] = field(default_factory=dict)
     sessions: list[dict] = field(default_factory=list)
+    scratch: str = ""
 
     @property
     def ok(self) -> bool:
@@ -274,7 +275,7 @@ def run_live(root: Path, scratch: Path, *, claude_version: str, mode: str = "aut
               for n in (SETTINGS, SETTINGS_LOCAL, GUARD_PATH, COMMITTED_NAME, LOCAL_NAME)}
     summary = [{k: v for k, v in s.items() if k != "calls"} | {"started_mode": s["started_mode"]}
                for s in sessions.values()]
-    return LiveResult(mode, verdicts, residue, claude_version, hashes, summary)
+    return LiveResult(mode, verdicts, residue, claude_version, hashes, summary, str(Path(scratch).resolve()))
 
 
 def cleanup(paths: list[str]) -> list[str]:
@@ -297,5 +298,7 @@ def record_live(root: Path, result: LiveResult, *, now: str) -> None:
              "claude_code": result.claude_code, "mode": result.mode, "ok": result.ok, "files": result.hashes,
              "baseline": "the same copy and prompt with no settings files, in the same mode",
              "rows": [vars(v) for v in result.verdicts], "residue": result.residue}
-    write_record(root / COMMITTED_RECORD, records[0], entry)
-    write_record(root / LOCAL_RECORD, records[1], {**entry, "rows": None, "see": COMMITTED_RECORD})
+    # The throwaway copies' folder is this machine's too; write_record's portable() does the rest.
+    shown = replace_paths(entry, {result.scratch: "<scratch>"} if result.scratch else {})
+    write_record(root / COMMITTED_RECORD, records[0], shown)
+    write_record(root / LOCAL_RECORD, records[1], {**entry, "see": COMMITTED_RECORD})

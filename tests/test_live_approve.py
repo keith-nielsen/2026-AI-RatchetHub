@@ -322,3 +322,33 @@ def test_approve_refuses_files_changed_since_the_live_entry(project, tmp_path):
     record_verify(project, verify_static(project, claude_version="v", home=tmp_path / "h", managed=()), now="t4")
     with pytest.raises(ApproveError, match="changed since the live verify entry"):
         approve(project, who="A Person", now="t5", claude_version="v")
+
+
+def test_the_committed_record_never_names_this_machine(project, tmp_path, monkeypatch):
+    """RH is published: the committed record carries no repository path, home folder or local
+    protected folder, from any of the four writers. The local record keeps the full detail."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    estate = tmp_path / "private-estate"
+    estate.mkdir()
+    (project / "ratchethub.local.toml").write_text(f'[protect]\nfolders = ["{estate}"]\n')
+    generate(project, claude_version="v", now="t0")
+    _verified(project, tmp_path)
+    approve(project, who="A Person", now="t3", claude_version="v")
+    committed = (project / COMMITTED_RECORD).read_text()
+    for private in (str(tmp_path), str(project), str(estate)):
+        assert private not in committed, private
+    assert "<local folder 1>" in committed, "the live row for the estate folder is still recorded"
+    local = (project / ".claude/ratchethub-record.local.json").read_text()
+    assert str(estate) in local and str(tmp_path / "scratch") in local, "the local record keeps the real paths"
+
+
+def test_portable_replaces_whole_paths_only(tmp_path):
+    from ratchethub.generate import portable
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    got = portable({"a": [f"{root}/x", f"{root}-copy/x", f"{tmp_path}/h/.ssh"]}, root, home=tmp_path / "h")
+    assert got == {"a": ["./x", f"{root}-copy/x", "~/.ssh"]}
+    nested = tmp_path / "h" / "repo"
+    nested.mkdir(parents=True)
+    assert portable(f"{nested}/y", nested, home=tmp_path / "h") == "./y", "the repository wins over home"

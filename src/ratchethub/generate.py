@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -236,8 +237,48 @@ def _write_local_keys(path: Path, keys: dict[str, list]) -> None:
 
 
 def write_record(path: Path, record: dict, entry: dict) -> None:
+    """Append an entry. An entry bound for the committed record passes through `portable` first, so
+    a published repository never names this machine: its paths, its home folder or its local
+    protected folders (charter C1; the local record keeps the full detail)."""
+    path = Path(path)
+    if path.name == Path(COMMITTED_RECORD).name:
+        entry = portable(entry, path.parent.parent)
     record = {**record, "entries": [*record["entries"], entry]}
     _atomic_write(path, (json.dumps(record, indent=2) + "\n").encode("utf-8"))
+
+
+def portable(obj, root: Path, home: Path | None = None):
+    """`obj` with every string rid of machine paths: each absolute local protected folder becomes
+    `<local folder N>` (its place in the local declaration), the repository becomes `.` and the
+    home folder `~`. Longest first, so a folder inside another is replaced whole."""
+    root = Path(root).resolve()
+    home = Path(home) if home is not None else Path.home()
+    try:
+        local = [p for p in load_local(root).protect if p.startswith("/")]
+    except DeclarationError:
+        local = []
+    swaps = {p.rstrip("/"): f"<local folder {i}>" for i, p in enumerate(dict.fromkeys(local), 1)}
+    swaps.setdefault(str(root), ".")
+    swaps.setdefault(str(home), "~")
+    return replace_paths(obj, swaps)
+
+
+def replace_paths(obj, swaps: dict[str, str]):
+    """Every string in `obj` with each whole path in `swaps` replaced, longest first."""
+    if not swaps:
+        return obj
+    pattern = re.compile("(?:" + "|".join(re.escape(k) for k in sorted(swaps, key=len, reverse=True))
+                         + r")(?![\w.-])")
+
+    def scrub(v):
+        if isinstance(v, str):
+            return pattern.sub(lambda m: swaps[m.group(0)], v)
+        if isinstance(v, dict):
+            return {scrub(k): scrub(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [scrub(x) for x in v]
+        return v
+    return scrub(obj)
 
 
 def last_generate(record: dict) -> dict:
