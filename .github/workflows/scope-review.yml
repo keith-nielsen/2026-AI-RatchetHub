@@ -1,0 +1,43 @@
+# Reusable: every changed path must be in the PR body's ```scope block. Call it at a pinned commit:
+#   uses: keith-nielsen/2026-AI-RatchetHub/.github/workflows/scope-review.yml@<commit sha>
+#   with: { ratchethub-ref: <the same commit sha> }
+name: scope review
+on:
+  workflow_call:
+    inputs:
+      ratchethub-ref:
+        description: the RatchetHub commit to run, the same one this workflow is called at
+        required: true
+        type: string
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  scope-review:
+    name: scope review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Refuse an unpinned RatchetHub ref
+        env:
+          REF: ${{ inputs.ratchethub-ref }}
+        run: echo "$REF" | grep -Eq '^[0-9a-f]{40}$' || { echo "ratchethub-ref must be a full commit sha"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: keith-nielsen/2026-AI-RatchetHub
+          ref: ${{ inputs.ratchethub-ref }}
+          path: .ratchethub
+          persist-credentials: false
+      - name: Write the PR body to a file
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s' "$BODY" > "$RUNNER_TEMP/body.md"
+      - name: Compare the diff with the declared scope
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: PYTHONPATH=.ratchethub/src python3 -m ratchethub.ci.scope --base "$BASE" --head "$HEAD" --body-file "$RUNNER_TEMP/body.md"

@@ -7,6 +7,9 @@
     report                             anyone: every generated row with its strength
     probe [--json]                     anyone: what this session can reach
     selftest                           anyone: every check against its broken inputs
+    pr / release                       the drivers: agent steps run, person steps handed off (G1, G3)
+    preflight                          the checks run before every push (G5)
+    platform                           GitHub compared with the declared state, read-only (G6)
 
 Exit codes: 0 done and passing; 1 refused or a check failed; 2 a usage error.
 """
@@ -176,6 +179,61 @@ def cmd_selftest(a) -> int:
     return 0 if not problems else 1
 
 
+def _github(a):
+    from .github.read import Reader, slug_from_remote
+
+    slug = slug_from_remote(str(a.root))
+    if not slug:
+        raise SystemExit("ratchethub: no GitHub remote named origin; the slug comes from the remote, never the folder")
+    gh = load_committed(a.root).github
+    return slug, Reader(), gh
+
+
+def cmd_pr(a) -> int:
+    from .github.driver import Driver
+    from .github.state import git
+
+    slug, reader, gh = _github(a)
+    base = a.base or (gh.default_branch if gh else "main")
+    branch = a.branch or git(a.root, "branch", "--show-current").stdout.strip()
+    d = Driver(a.root, slug, reader)
+    if a.assert_head or a.assert_pr:
+        ok = d.assert_state(branch, base, head=a.assert_head or "", pr=a.assert_pr or 0)
+        print("state unchanged: proceeding" if ok else "GitHub has moved since this plan was written; stopping "
+              "without changing anything. Run the driver again.")
+        return 0 if ok else 1
+    return d.run(branch, base, title=a.title or "", body_file=a.body_file or "", mnemonic=a.tag or "change").code
+
+
+def cmd_release(a) -> int:
+    from .github.driver import release
+
+    slug, reader, gh = _github(a)
+    return release(a.root, slug, reader, tag=a.tag, notes_file=a.notes, default_branch=gh.default_branch if gh else "main")
+
+
+def cmd_preflight(a) -> int:
+    from .github.preflight import FINDING, preflight
+
+    items = preflight(a.root, base_ref=a.base)
+    for i in items:
+        print(f"  {i.result:<10} {i.name}: {i.detail}")
+    return 1 if any(i.result == FINDING for i in items) else 0
+
+
+def cmd_platform(a) -> int:
+    from .github.platform import DRIFT, reconcile
+
+    slug, reader, gh = _github(a)
+    if gh is None:
+        return _refused(["no [github] section declares the platform state to compare"])
+    rows = reconcile(reader, slug, gh, a.root)
+    for r in rows:
+        print(f"  {r.result:<10} {r.item}: {r.detail}" + (f" [{r.channel}]" if r.channel else ""))
+    print("read-only: drift is reported, never fixed")
+    return 1 if any(r.result == DRIFT for r in rows) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="ratchethub", description=__doc__.split("\n")[0])
     ap.add_argument("--version", action="version", version=f"ratchethub {__version__}")
@@ -199,10 +257,26 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("probe")
     p.add_argument("--json", action="store_true")
     sub.add_parser("selftest")
+    pr = sub.add_parser("pr", help="the PR lifecycle driver (level-triggered)")
+    pr.add_argument("--branch")
+    pr.add_argument("--base")
+    pr.add_argument("--title")
+    pr.add_argument("--body-file")
+    pr.add_argument("--tag", help="a short name for the change, used in the handoff line's tag")
+    pr.add_argument("--assert-head")
+    pr.add_argument("--assert-pr", type=int)
+    pr.add_argument("--after", help="the step the plan just ran; the driver re-derives the state")
+    rel = sub.add_parser("release", help="the release driver")
+    rel.add_argument("--tag", required=True)
+    rel.add_argument("--notes", required=True)
+    pf = sub.add_parser("preflight", help="the checks run before every push")
+    pf.add_argument("--base")
+    sub.add_parser("platform", help="compare GitHub with the declared platform state (read-only)")
     a = ap.parse_args(argv)
     a.root = project_root(a.root)
     return {"generate": cmd_generate, "verify": cmd_verify, "live": cmd_live, "approve": cmd_approve,
-            "report": cmd_report, "probe": cmd_probe, "selftest": cmd_selftest}[a.step](a)
+            "report": cmd_report, "probe": cmd_probe, "selftest": cmd_selftest, "pr": cmd_pr,
+            "release": cmd_release, "preflight": cmd_preflight, "platform": cmd_platform}[a.step](a)
 
 
 if __name__ == "__main__":

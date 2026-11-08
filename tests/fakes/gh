@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""A fake `gh` for the GitHub-half tests: `gh api` only, against a JSON state file.
+
+State file: $FAKE_GH_STATE. Every call is appended to $FAKE_GH_STATE.calls (argv as JSON), so tests
+check the command shape the driver really ran. `lag` (an integer) hides a newly created PR from
+that many list reads, as GitHub's read view lags a write.
+"""
+import json, os, re, sys
+
+path = os.environ["FAKE_GH_STATE"]
+st = json.load(open(path))
+argv = sys.argv[1:]
+with open(path + ".calls", "a") as fh:
+    fh.write(json.dumps(argv) + "\n")
+
+def save():
+    json.dump(st, open(path, "w"))
+
+def fail(code, msg):
+    sys.stderr.write(f"gh: {msg} (HTTP {code})\n"); sys.exit(1)
+
+if argv[:1] != ["api"]:
+    fail(400, "fake gh supports only `gh api`")
+method, fields, i, endpoint = "GET", {}, 1, None
+while i < len(argv):
+    a = argv[i]
+    if a in ("-X", "--method"):
+        method = argv[i + 1]; i += 2; continue
+    if a in ("-f", "-F"):
+        k, _, v = argv[i + 1].partition("=")
+        if v.startswith("@"):
+            v = open(v[1:]).read()
+        fields[k] = v; i += 2; continue
+    endpoint = endpoint or a.lstrip("/"); i += 1
+if st.get("unauthenticated") and method != "GET":
+    fail(401, "Bad credentials")
+p = endpoint.split("?")[0]
+m = re.fullmatch(r"repos/([^/]+/[^/]+)/(.*)", p)
+rest = m.group(2) if m else p
+out = None
+if method == "GET":
+    if rest.startswith("branches/"):
+        name = rest[len("branches/"):]
+        if name not in st["branches"]:
+            fail(404, "Not Found")
+        out = {"name": name, "commit": {"sha": st["branches"][name]}}
+    elif rest == "branches":
+        out = [{"name": n, "commit": {"sha": s}} for n, s in st["branches"].items()]
+    elif rest == "pulls":
+        q = dict(kv.split("=", 1) for kv in endpoint.split("?", 1)[1].split("&"))
+        head = q.get("head", ":").split(":", 1)[1]
+        base = q.get("base")
+        out = [pr for pr in st["pulls"] if (not head or pr["head"]["ref"] == head)
+               and (not base or pr["base"]["ref"] == base) and (q.get("state") == "all" or pr["state"] == q.get("state"))]
+        if st.get("lag"):
+            hidden = st["pulls"][-1]["number"] if st["pulls"] else None
+            out = [pr for pr in out if pr["number"] != hidden]
+            st["lag"] -= 1; save()
+    elif re.fullmatch(r"pulls/\d+", rest):
+        out = next((pr for pr in st["pulls"] if pr["number"] == int(rest.split("/")[1])), None)
+        if out is None:
+            fail(404, "Not Found")
+    elif re.fullmatch(r"commits/[^/]+/check-runs", rest):
+        out = {"check_runs": st["checks"].get(rest.split("/")[1], [])}
+    elif rest == "actions/runs":
+        out = {"workflow_runs": []}
+    elif rest in ("tags", "releases", "labels", "rulesets"):
+        out = st.get(rest, [])
+    elif rest.startswith("rules/branches/"):
+        out = st.get("rules", [])
+    else:
+        fail(404, f"Not Found: {rest}")
+elif method == "POST" and rest == "pulls":
+    n = max([pr["number"] for pr in st["pulls"]] + [0]) + 1
+    pr = {"number": n, "state": "open", "draft": False, "merged": False, "merged_at": None,
+          "mergeable": True, "mergeable_state": "clean", "title": fields["title"], "body": fields.get("body", ""),
+          "head": {"ref": fields["head"], "sha": st["branches"].get(fields["head"])}, "base": {"ref": fields["base"]}}
+    st["pulls"].append(pr); st["lag"] = st.get("lag_on_create", 0); save(); out = pr
+elif method == "DELETE" and rest.startswith("git/refs/heads/"):
+    st["branches"].pop(rest[len("git/refs/heads/"):], None); save(); out = None
+else:
+    fail(404, f"Not Found: {method} {rest}")
+if out is not None:
+    print(json.dumps(out))

@@ -20,13 +20,13 @@ SCHEMA_VERSIONS = (1, 2)
 COMMITTED_NAME = "ratchethub.toml"
 LOCAL_NAME = "ratchethub.local.toml"
 
-COMMITTED_SECTIONS = {"ratchethub", "project", "protect", "network", "deny_command", "publish", "writable"}
+COMMITTED_SECTIONS = {"ratchethub", "project", "protect", "network", "deny_command", "publish", "writable", "github"}
 LOCAL_SECTIONS = {"protect", "deny_command"}
 # Runtime settings keys. Setting them by declaration would bypass the generator's floor (C5).
 FLOOR_SECTIONS = {"sandbox", "permissions", "hooks"}
 # Planned for later schema versions (docs/change-protocol.md §5, docs/v1-scope.md §5).
 LATER_SECTIONS = {"exempt", "exception"}
-V2_SECTIONS = {"writable"}
+V2_SECTIONS = {"writable", "github"}
 
 SECTION_KEYS = {
     "ratchethub": {"schema"},
@@ -36,7 +36,11 @@ SECTION_KEYS = {
     "deny_command": {"pattern", "reason"},
     "publish": {"remotes_allowed"},
     "writable": {"folders"},
+    "github": {"default_branch", "required_checks", "labels", "rulesets", "secret_scanning", "push_protection",
+               "preflight"},
 }
+LABEL_KEYS = {"name", "color", "description"}
+COLOR = re.compile(r"^[0-9a-f]{6}$")
 
 # Folders that run code outside the sandbox, relative to the home folder (protocol §5). A writable
 # folder may not be one of these, inside one, or hold one.
@@ -74,6 +78,28 @@ class Declaration:
     remotes_allowed: bool | None
     writable: tuple[str, ...] = ()  # project-relative, or starting `~/` (schema 2)
     schema: int = SCHEMA_VERSION
+    github: "GitHub | None" = None  # schema 2
+
+
+@dataclass(frozen=True)
+class Label:
+    name: str
+    color: str
+    description: str
+
+
+@dataclass(frozen=True)
+class GitHub:
+    """Declared platform state (v1 scope G6) and the preflight (G5). Rulesets are JSON files in
+    the project, compared by content."""
+
+    default_branch: str
+    required_checks: tuple[str, ...]
+    labels: tuple[Label, ...]
+    rulesets: tuple[str, ...]
+    secret_scanning: bool | None
+    push_protection: bool | None
+    preflight: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -120,9 +146,11 @@ def load_committed(root: Path, *, home: Path | None = None, path_env: str | None
     writable = _writable(data, Path(root), Path(home) if home else Path.home(),
                          os.environ.get("PATH", "") if path_env is None else path_env, protect, errors)
 
+    github = _github(data, Path(root), errors)
+
     if errors:
         raise DeclarationError(COMMITTED_NAME, errors)
-    return Declaration(name, protect, network, deny, remotes, writable, known)
+    return Declaration(name, protect, network, deny, remotes, writable, known, github)
 
 
 def load_local(root: Path) -> LocalDeclaration:
@@ -314,6 +342,66 @@ def _writable(data: dict, root: Path, home: Path, path_env: str, protect: tuple[
         if ok and norm not in out:
             out.append(norm)
     return tuple(out)
+
+
+def _strings(section: dict, key: str, where: str, errors: list[str]) -> tuple[str, ...]:
+    value = section.get(key, [])
+    if not isinstance(value, list) or not all(isinstance(v, str) and v.strip() for v in value):
+        errors.append(f"{where} {key} must be an array of non-empty strings")
+        return ()
+    return tuple(dict.fromkeys(value))
+
+
+def _github(data: dict, root: Path, errors: list[str]):
+    section = data.get("github")
+    if section is None:
+        return None
+    if not isinstance(section, dict):
+        errors.append("[github] must be a table")
+        return None
+    branch = section.get("default_branch")
+    if not isinstance(branch, str) or not re.fullmatch(r"[A-Za-z0-9._/-]{1,100}", branch or "") or ".." in branch:
+        errors.append("[github] default_branch is required and must be a plain branch name")
+    checks = _strings(section, "required_checks", "[github]", errors)
+    preflight = _strings(section, "preflight", "[github]", errors)
+    rulesets = []
+    for raw in _strings(section, "rulesets", "[github]", errors):
+        norm = posixpath.normpath(raw)
+        if raw.startswith(("/", "~")) or norm.startswith("..") or not norm.endswith(".json"):
+            errors.append(f"[github] ruleset {raw!r} must be a project-relative .json file")
+        elif not (root / norm).is_file() or (root / norm).is_symlink():
+            errors.append(f"[github] ruleset {raw!r} does not exist as a plain file")
+        else:
+            rulesets.append(norm)
+    labels = []
+    raw_labels = section.get("labels", [])
+    if not isinstance(raw_labels, list):
+        errors.append("[github] labels must be written as [[github.labels]] entries")
+        raw_labels = []
+    for i, lab in enumerate(raw_labels, 1):
+        if not isinstance(lab, dict) or set(lab) - LABEL_KEYS or not isinstance(lab.get("name"), str) \
+                or not lab.get("name", "").strip():
+            errors.append(f"[[github.labels]] #{i} needs a name, and only name, color and description")
+            continue
+        color = str(lab.get("color", "ededed")).lower().lstrip("#")
+        if not COLOR.match(color):
+            errors.append(f"[[github.labels]] #{i} color must be six hex digits")
+            continue
+        desc = lab.get("description", "")
+        if not isinstance(desc, str):
+            errors.append(f"[[github.labels]] #{i} description must be a string")
+            continue
+        if lab["name"] not in [l.name for l in labels]:
+            labels.append(Label(lab["name"], color, desc))
+    flags = {}
+    for key in ("secret_scanning", "push_protection"):
+        v = section.get(key)
+        if v is not None and not isinstance(v, bool):
+            errors.append(f"[github] {key} must be a boolean")
+            v = None
+        flags[key] = v
+    return GitHub(branch if isinstance(branch, str) else "", checks, tuple(labels), tuple(rulesets),
+                  flags["secret_scanning"], flags["push_protection"], preflight)
 
 
 def _network(data: dict, errors: list[str]) -> tuple[str, ...]:

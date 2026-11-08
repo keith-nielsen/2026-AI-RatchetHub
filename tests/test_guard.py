@@ -68,7 +68,8 @@ def test_unreadable_commands_raise(text):
     "gh api -X POST https://uploads.github.com/repos/o/r/releases/1/assets?name=a.tgz --input a.tgz",
     "curl -X POST https://uploads.github.com/repos/o/r/releases/1/assets", "npm publish", "pnpm publish",
     "python3 -m twine upload dist/*", "docker push img", "cargo publish", "uv publish",
-    "bash -c 'git push --tags'", 'echo "$(npm publish)"',
+    "bash -c 'git push --tags'", 'echo "$(npm publish)"', "bash ~/p/.git/ratchethub/next.sh  # x step:merge",
+    "sh /p/.git/ratchethub/next.sh", ". /p/.git/ratchethub/next.sh", "cd /p && ./.git/ratchethub/next.sh",
 ])
 def test_outbound_denies(cmd):
     v = g.outbound(cmd, "/nonexistent", no_remotes=False)

@@ -407,6 +407,7 @@ GH_IRREVERSIBLE = {("repo", "create"), ("repo", "fork"), ("repo", "delete"), ("r
                    ("repo", "archive"), ("release", "create"), ("release", "edit"), ("release", "upload"),
                    ("release", "delete"), ("gist", "create"), ("gist", "edit")}
 EMISSION = os.path.join(".git", "ratchethub", "emitted.json")
+PLAN_SUFFIX = ".git/ratchethub/next.sh"
 
 
 def _contents_match(parts: list[str]) -> bool:
@@ -417,6 +418,9 @@ def _contents_match(parts: list[str]) -> bool:
 def outbound_verdict(argv: list[str], no_remotes: bool) -> tuple[str, str] | None:
     """('deny' | 'ask', reason) for one command, or None."""
     base = argv[0].rsplit("/", 1)[-1] if argv else ""
+    if any(a.replace("\\", "/").endswith(PLAN_SUFFIX) for a in argv):
+        return "deny", ("the handoff file holds a person's step (a merge, a tag, a release); the agent "
+                        "relays its line and never runs it")
     git = git_subcommand(argv)
     if git:
         sub, rest = git

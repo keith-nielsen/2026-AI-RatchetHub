@@ -9,7 +9,7 @@ Reads only. Mutations never come through here; they go through REST paths the `g
 sanctions, never `gh pr edit`.
 
 The anonymous budget is 60 requests an hour, and a `304 Not Modified` still spends one (measured
-in VMM, 2026-08-04), so the budget headers of every response are recorded for the report.
+2026-08-04), so the budget headers of every response are recorded for the report.
 """
 
 from __future__ import annotations

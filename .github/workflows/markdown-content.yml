@@ -1,0 +1,37 @@
+# Reusable: a Markdown change preserved its prose, or names exactly what it altered.
+name: markdown content
+on:
+  workflow_call:
+    inputs:
+      ratchethub-ref:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  markdown-content:
+    name: markdown content
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Refuse an unpinned RatchetHub ref
+        env:
+          REF: ${{ inputs.ratchethub-ref }}
+        run: echo "$REF" | grep -Eq '^[0-9a-f]{40}$' || { echo "ratchethub-ref must be a full commit sha"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: keith-nielsen/2026-AI-RatchetHub
+          ref: ${{ inputs.ratchethub-ref }}
+          path: .ratchethub
+          persist-credentials: false
+      - name: Self-test, then compare
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          PYTHONPATH=.ratchethub/src python3 -m ratchethub.ci.md_content --selftest
+          PYTHONPATH=.ratchethub/src python3 -m ratchethub.ci.md_content --base "$BASE" --head "$HEAD"

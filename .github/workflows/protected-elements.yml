@@ -1,0 +1,38 @@
+# Reusable, ADVISORY: protected elements keep their declared hashes. Advisory until its burn-in
+# completes (v1 scope §2, gate rules), so the job can't fail the run and its name says so.
+name: protected elements (advisory)
+on:
+  workflow_call:
+    inputs:
+      ratchethub-ref:
+        required: true
+        type: string
+      elements-file:
+        description: JSON object of project-relative path to sha256
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  protected-elements:
+    name: protected elements (advisory)
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - name: Refuse an unpinned RatchetHub ref
+        env:
+          REF: ${{ inputs.ratchethub-ref }}
+        run: echo "$REF" | grep -Eq '^[0-9a-f]{40}$' || { echo "ratchethub-ref must be a full commit sha"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: keith-nielsen/2026-AI-RatchetHub
+          ref: ${{ inputs.ratchethub-ref }}
+          path: .ratchethub
+          persist-credentials: false
+      - name: Compare hashes
+        env:
+          ELEMENTS: ${{ inputs.elements-file }}
+        run: PYTHONPATH=.ratchethub/src python3 -m ratchethub.ci.protected --elements "$ELEMENTS"
