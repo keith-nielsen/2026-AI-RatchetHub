@@ -1,0 +1,38 @@
+# ratchethub.toml: RatchetHub governing its own repository (dogfooding).
+
+[ratchethub]
+schema = 2
+
+[project]
+name = "ratchethub"
+
+[network]
+allow = ["api.github.com", "github.com"]
+
+# Carried over from the hand-written leash, so adoption drops nothing.
+[[deny_command]]
+pattern = "gh pr:*"
+reason = "the gh guard permits only gh api REST paths; kept as a second, prefix-rule layer"
+
+[[deny_command]]
+pattern = "gh issue:*"
+reason = "as above"
+
+[[deny_command]]
+pattern = "gh project:*"
+reason = "as above"
+
+[[deny_command]]
+pattern = "gh repo view:*"
+reason = "as above"
+
+[[deny_command]]
+pattern = "gh api graphql:*"
+reason = "GraphQL needs authentication for every call and has failed silently"
+
+[publish]
+remotes_allowed = true
+
+[github]
+default_branch = "main"
+required_checks = ["test"]

@@ -1,0 +1,5 @@
+.claude/settings.local.json
+.scaffold/
+__pycache__/
+ratchethub.local.toml
+.claude/ratchethub-record.local.json

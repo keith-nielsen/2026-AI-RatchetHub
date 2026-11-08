@@ -1,0 +1,64 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit(/.claude/**)",
+      "Edit(/ratchethub.toml)",
+      "Edit(/ratchethub.local.toml)",
+      "Edit(/.mcp.json)",
+      "Edit(/.git/hooks/**)",
+      "Edit(/.git/config)",
+      "Bash(gh pr:*)",
+      "Bash(gh issue:*)",
+      "Bash(gh project:*)",
+      "Bash(gh repo view:*)",
+      "Bash(gh api graphql:*)"
+    ],
+    "disableBypassPermissionsMode": "disable"
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "network": {
+      "allowedDomains": [
+        "api.github.com",
+        "github.com"
+      ]
+    },
+    "filesystem": {
+      "denyWrite": [
+        "./.claude",
+        "./ratchethub.toml",
+        "./ratchethub.local.toml"
+      ]
+    }
+  },
+  "disableAllHooks": false,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/ratchethub_guard.py\" outbound"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/ratchethub_guard.py\" gh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/ratchethub_guard.py\" relay"
+          }
+        ]
+      }
+    ]
+  }
+}
