@@ -47,7 +47,7 @@ def test_hidden_commands_are_found(text):
     assert any(a[:2] == ["git", "push"] for a in g.commands(text)), g.commands(text)
 
 
-@pytest.mark.parametrize("text", ["echo 'unterminated", 'echo "x', "echo $(x", "echo `x", "cat <<EOF\nx"])
+@pytest.mark.parametrize("text", ["echo 'unterminated", 'echo "x', "echo $(x", "echo `x", "cat <<EOF\nx", "cat <<EOF"])
 def test_unreadable_commands_raise(text):
     with pytest.raises(g.ParseError):
         g.commands(text)
@@ -64,7 +64,8 @@ def test_unreadable_commands_raise(text):
     "gh api -X POST repos/o/r/releases -f tag_name=v1", "gh api --method=POST repos/o/r/releases",
     "gh api -XPOST repos/o/r/git/refs -f ref=refs/tags/v1", "gh api repos/o/r/releases -f tag_name=v1",
     "gh api -X PUT repos/o/r/contents/README.md -f message=m", "gh api -X POST user/repos -f name=x",
-    "gh api -X DELETE /repos/o/r/releases/123",
+    "gh api -X DELETE /repos/o/r/releases/123", "gh api -X PUT repos/o/r/contents/docs/deep/a.md -f message=m",
+    "gh api -X POST https://uploads.github.com/repos/o/r/releases/1/assets?name=a.tgz --input a.tgz",
     "curl -X POST https://uploads.github.com/repos/o/r/releases/1/assets", "npm publish", "pnpm publish",
     "python3 -m twine upload dist/*", "docker push img", "cargo publish", "uv publish",
     "bash -c 'git push --tags'", 'echo "$(npm publish)"',
@@ -148,7 +149,7 @@ def test_emission_never_allows_under_no_remotes(tmp_path):
 
 @pytest.mark.parametrize("cmd", [
     "gh pr list", "gh issue list", "gh run list", "gh repo view", "cd /tmp && gh pr list", "/usr/bin/gh pr view 1",
-    "gh api graphql -f query=x", "gh api -X POST graphql -f query=x", "gh api --method=POST graphql",
+    "gh api graphql", "gh api -X GET graphql", "gh api graphql -f query=x", "gh api -X POST graphql -f query=x", "gh api --method=POST graphql",
     "gh api -XPOST graphql", "gh api", "gh api -X DELETE repos/o/r", "gh api --method DELETE repos/o/r/hooks/12",
     "gh api -X PATCH /repos/o/r/actions/permissions", "gh api -X PUT /repos/o/r/rulesets/1 --input p.json",
     "gh api -X PATCH repos/o/r/rulesets/1", "gh api -X POST repos/o/r/actions/runners/registration-token",

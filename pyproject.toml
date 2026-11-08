@@ -5,6 +5,16 @@ description = "Locks down a project for an AI coding agent: declare what to prot
 requires-python = ">=3.11"  # tomllib
 dependencies = []
 
+[project.scripts]
+ratchethub = "ratchethub.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

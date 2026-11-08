@@ -491,8 +491,6 @@ def outbound(command: str, project: str, no_remotes: bool) -> tuple[str, str] | 
         v = outbound_verdict(argv, no_remotes)
         if v and (worst is None or v[0] == "deny"):
             worst = v
-        if worst and worst[0] == "deny":
-            break
     if worst and worst[0] == "ask":
         rec = emission(project)
         if rec and rec.get("command") == command:
