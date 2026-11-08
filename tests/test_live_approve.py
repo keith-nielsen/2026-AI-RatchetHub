@@ -56,7 +56,9 @@ class FakeRuntime:
     def _prompt(argv, stdin):
         """Parse argv the way the real CLI does: a variadic option (`--add-dir <directories...>`)
         takes every following argument that isn't an option, so only what's left is the prompt."""
-        variadic, takes_one = {"--add-dir"}, {"--model", "--max-turns", "--output-format", "--permission-mode"}
+        variadic, takes_one = {"--add-dir", "--allowedTools"}, {"--model", "--max-turns", "--output-format",
+                                                                 "--permission-mode"}
+        argv = argv[argv.index("claude"):]
         positional, i = [], 1
         while i < len(argv):
             tok = argv[i]
@@ -77,11 +79,23 @@ class FakeRuntime:
         if arg.startswith(("git push", "gh ")):
             hooked = (governed and self.breaks != "no-hooks") or self.breaks == "baseline-hooked"
             return True, ("RatchetHub: refused" if hooked else "fatal: no remote")
-        path = Path(arg.split("touch ", 1)[1] if kind == "bash" else arg)
+        recognised = kind == "bash" and arg.startswith("touch ")
+        if kind == "bash":
+            path = Path(arg.split("touch ", 1)[1] if recognised else arg.split("open('", 1)[1].split("'", 1)[0])
+        else:
+            path = Path(arg)
+        rel = path.parent.resolve().relative_to(Path(cwd).resolve()).as_posix() if path.parent.resolve().is_relative_to(Path(cwd).resolve()) else ""
+        if (governed and recognised and "auto" in self.calls[-1][0]
+                and any(rel == d or rel.startswith(d + "/") for d in (".claude", ".git"))):
+            # permission-modes "Protected paths": a recognised write there goes to the classifier
+            return True, "Permission for this action was denied by the Claude Code auto mode classifier."
         protected = path.parent.resolve() != Path(cwd).resolve()
         refuse = governed and protected and self.breaks != "governed-lands"
         if not governed and self.breaks == "baseline-holds":
             refuse = True
+        server_review = "CLAUDE_CODE_AUTO_MODE_SERVER=0" not in self.calls[-1][0]
+        if refuse and kind == "bash" and server_review and "auto" in self.calls[-1][0]:
+            return True, "Permission for this action was denied by the Claude Code auto mode classifier."
         if refuse:
             if self.breaks == "classifier" and governed:
                 return True, "This action was blocked by the auto mode classifier."
@@ -129,7 +143,8 @@ def test_both_sessions_run_in_the_same_mode_with_the_same_add_dirs(project, tmp_
     rt = FakeRuntime()
     result = live.run_live(project, tmp_path / "scratch", claude_version="v", runner=rt, mode="auto")
     (gov_argv, gov_cwd), (base_argv, base_cwd) = rt.calls
-    assert gov_argv[:-1] == base_argv[:-1] and "--strict-mcp-config" in gov_argv
+    same = lambda argv: [a.replace("governed", "baseline") for a in argv]
+    assert same(gov_argv) == same(base_argv) and "--strict-mcp-config" in gov_argv, "same mode, flags and rules"
     assert ["--add-dir", str(ext)] == gov_argv[gov_argv.index("--add-dir"):gov_argv.index("--add-dir") + 2]
     assert (gov_cwd / ".claude" / "settings.json").exists() and not (base_cwd / ".claude" / "settings.json").exists()
     assert result.ok and not list(ext.iterdir()), "external probe files must be deleted by name"
@@ -401,3 +416,17 @@ def test_the_prompt_survives_the_add_dir_list(project, tmp_path):
 def test_the_real_runner_sends_the_prompt_on_stdin(tmp_path):
     out, _, rc = live.claude_runner(["sh", "-c", "cat"], tmp_path, "the prompt")
     assert (out, rc) == ("the prompt", 0)
+
+
+def test_each_bash_probe_has_an_exact_allow_rule_and_no_broader_one(project, tmp_path):
+    rt = FakeRuntime()
+    live.run_live(project, tmp_path / "scratch", claude_version="v", runner=rt)
+    for argv, _ in rt.calls:
+        i = argv.index("--allowedTools")
+        rules = []
+        for tok in argv[i + 1:]:
+            if tok.startswith("-"):
+                break
+            rules.append(tok)
+        assert rules and all(r.startswith("Bash(") and "*" not in r for r in rules), rules
+        assert any("touch " in r for r in rules) and any("git push" in r for r in rules)
