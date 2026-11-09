@@ -178,9 +178,31 @@ def test_a_failed_read_is_no_answer(world, monkeypatch):
 def test_an_unauthenticated_write_is_handed_to_a_person(world):
     _pushed(world, GREEN)
     world.set(unauthenticated=True)
-    o = world.run()
+    o = world.run(mnemonic="s8")
     assert o.code == D.HANDOFF and "Bad credentials" in " ".join(world.lines)
     assert "repos/o/r/pulls" in handoff.plan_path(world.root).read_text()
+    relayed = (world.root / guard.RELAY_LINE).read_text().strip()
+    assert relayed.endswith("# s8 create-pr"), "the change's tag survives a failed write"
+    assert guard.relay("\n".join(world.lines), str(world.root)) is None
+
+
+def test_the_push_is_not_claimed_for_the_agent(world):
+    """Where the agent's channel has no GitHub credential the push is the person's, so the
+    driver's line can't name the agent as the one who runs it."""
+    world.run()
+    text = " ".join(world.lines)
+    assert "(agent)" not in text and "otherwise a person does" in text
+
+
+def test_a_plan_verifies_with_the_same_ratchethub_without_it_on_path(world, tmp_path):
+    """The first real handoff's verify line called `ratchethub`, which wasn't installed: the PR
+    would have opened and the plan then failed. The line must run from anywhere, clean env."""
+    from ratchethub.cli import self_command
+    cmd = self_command(world.root, "pr") + " --help"
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    r = subprocess.run(["bash", "-c", cmd], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert r.returncode == 0 and "--assert-head" in r.stdout, r.stderr
+    assert str(world.root.resolve()) in cmd
 
 
 def test_assert_state_refuses_a_moved_head(world):
@@ -276,3 +298,42 @@ def test_mergeable_needs_a_clean_merge_state_not_just_no_conflicts(world, merge_
     assert st.state == want, (st.state, st.detail)
     if want == S.NOT_MERGEABLE:
         assert merge_state in st.detail
+
+
+def test_cli_pr_plans_verify_with_the_same_ratchethub(world):
+    """Through the CLI, a handed-over write's plan verifies with `self_command`, not a bare
+    `ratchethub` that may not be on the person's PATH."""
+    from ratchethub.cli import main, self_command
+    subprocess.run(["git", "-C", str(world.root), "remote", "add", "origin", "https://github.com/o/r.git"], check=True)
+    (world.root / "ratchethub.toml").write_text('[ratchethub]\nschema = 2\n[project]\nname = "p"\n'
+                                                '[github]\ndefault_branch = "main"\n')
+    _pushed(world, GREEN)
+    world.set(unauthenticated=True)
+    import ratchethub.github.read as rd
+    orig = rd.Reader.__init__
+    rd.Reader.__init__ = lambda self, anon=offline, gh=None, budget=None: orig(self, anon, gh, budget or rd.Budget())
+    try:
+        assert main(["--root", str(world.root), "pr", "--title", "T", "--body-file", world.body]) == D.HANDOFF
+    finally:
+        rd.Reader.__init__ = orig
+    plan = handoff.plan_path(world.root).read_text().splitlines()
+    assert self_command(world.root, "pr") + " --branch feat-x" in plan
+
+
+def test_cli_release_plans_verify_with_the_same_ratchethub(main_repo):
+    from ratchethub.cli import main, self_command
+    w, notes = main_repo
+    subprocess.run(["git", "-C", str(w.root), "remote", "add", "origin", "https://github.com/o/r.git"], check=True)
+    (w.root / "ratchethub.toml").write_text('[ratchethub]\nschema = 2\n[project]\nname = "p"\n'
+                                            '[github]\ndefault_branch = "main"\n')
+    subprocess.run(["git", "-C", str(w.root), "add", "ratchethub.toml"], check=True)
+    subprocess.run(["git", "-C", str(w.root), "commit", "-q", "-m", "declare"], check=True)
+    import ratchethub.github.read as rd
+    orig = rd.Reader.__init__
+    rd.Reader.__init__ = lambda self, anon=offline, gh=None, budget=None: orig(self, anon, gh, budget or rd.Budget())
+    try:
+        assert main(["--root", str(w.root), "release", "--tag", "v1.0.0", "--notes", notes]) == D.HANDOFF
+    finally:
+        rd.Reader.__init__ = orig
+    plan = handoff.plan_path(w.root).read_text().splitlines()
+    assert any(line.startswith(self_command(w.root, "release") + " --tag v1.0.0") for line in plan), plan
