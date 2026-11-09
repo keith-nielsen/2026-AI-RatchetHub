@@ -3,7 +3,9 @@
 > **Status:** signed off by the operator, 2026-11-08; its three decisions ruled (§9, 2026-10-25).
 > **Amendment signed off by the operator, 2026-11-09 (§10):** who records a verify
 > entry, what Approve requires, the guard file, the command for each step, and how live Verify
-> runs (from RH's first live Verify of itself). Details charter §3 (declare → generate → verify →
+> runs (from RH's first live Verify of itself).
+> **§8 repeat run signed off by the operator, 2026-11-10:** the live probes repeated on Claude Code
+> 2.1.319, with an interpreter probe added for row 3. Details charter §3 (declare → generate → verify →
 > approve), adds standing exceptions (closing the gap in charter §4), and records where the floor
 > lives. Runtime facts come from the Claude Code documentation fetched 2026-10-24, read against
 > Claude Code v2.1.310. A fact marked **unprobed** is documented but not yet shown by a live probe,
@@ -313,7 +315,7 @@ cuts against charter C4. The `--settings` launcher is the first upgrade worth pr
 | An exception expires | **detective**: when Generate or Verify runs |
 | An approval matches what was verified | record hashes; protects against mistakes, not forgery |
 
-## 8. Live probes (run 2026-10-24T14:07:36Z, Claude Code 2.1.310, Linux)
+## 8. Live probes (run 2026-10-24T14:07:36Z, Claude Code 2.1.310, Linux; repeated 2026-11-09T17:42:36Z, Claude Code 2.1.319)
 
 Each claim below was added from documentation (commit `1cb5bf1` or this document) and then probed
 live. Method: headless `claude -p` sessions in throwaway projects, one session per mode with the
@@ -325,7 +327,7 @@ write landed. Where both held, the mode itself refuses the write, and that mode 
 | --- | --- | --- |
 | 1 | `disableBypassPermissionsMode = "disable"` stops bypass | **Holds, silently.** `--permission-mode bypassPermissions` and `--dangerously-skip-permissions` both started the session in `auto` (the user's default mode) with no error and no warning. A person who asks for bypass gets no signal that it was refused. |
 | 2 | file tools can't write `.mcp.json`, `.git/hooks/`, `.git/config` | **Enforced by permission rule** in `auto` and in the downgraded bypass sessions. Without settings, `auto` let the agent write all three. `default` and `acceptEdits` refuse them headless even without settings (held by mode). |
-| 3 | the agent can't write the record file, by either channel | **Enforced:** file tools by permission rule, Bash by the operating system sandbox (`Read-only file system`), same mode pattern as row 2 |
+| 3 | the agent can't write the record file, by either channel | **Enforced:** file tools by permission rule, Bash by the operating system sandbox (`Read-only file system`), same mode pattern as row 2. The repeat added a Bash write through an interpreter with an exact allow rule (§10 item 7): the sandbox refused it in **all five modes**, while it landed in every session without settings. So the sandbox holds even where `default` and `acceptEdits` would otherwise refuse the write themselves. |
 | 4 | an `ask` rule on an excluded command makes a person approve each use | **Holds as a deny in headless runs** (`default`, `auto`), even with an allow rule matching. A headless run can't show a prompt, so the prompt itself wasn't observed. "Still prompts after 'Yes, and don't ask again'" **wasn't tested**: it needs a trusted workspace (see below). |
 | 5 | an excluded command runs unsandboxed; after `cd` it stays sandboxed | **Holds** in `default` and `auto`. The excluded call landed in a folder the sandbox denies. The `cd .` form and a non-excluded control were refused by the sandbox. |
 
@@ -336,8 +338,19 @@ Facts the probes surfaced, not in the claims above:
   unaffected. The probes used `--allowedTools` in their place.
 - **Working-directory check:** a command writing outside the session's working directories needs
   approval even when an allow rule matches. The probes kept their targets inside the project.
-- **Each claim rests on one run per mode.** A repeat run, and the interactive prompt for row 4,
-  are still owed before a formal report.
+- **Repeat run (2026-11-09, 2.1.319):** the same method and the same sessions, plus the row 3
+  interpreter probe. Every row the two runs share gave the same verdict. The auto mode classifier
+  refused none of the 96 calls. Every refusal in the governed sessions came from a permission rule
+  (20) or the sandbox (14). A row 4 or 5 refusal counts only if the call was attempted and the
+  expected component refused it. The first run's script didn't check this; its logs were re-read
+  and meet it.
+- **Protected paths ask without settings:** on 2.1.319, `default` and `acceptEdits` ask before any
+  write into `.claude`, `.git` or `.mcp.json`, including a Bash `touch`. A headless run can't
+  answer, so those rows are "held by mode" there.
+- **Session state:** each headless session leaves an empty per-project folder in the user's Claude
+  Code state, even with `--no-session-persistence`. The probe cleanup removes it once it has
+  confirmed the folder is empty.
+- **Still owed before a formal report:** the interactive prompt for row 4.
 
 ## 9. Decisions
 
