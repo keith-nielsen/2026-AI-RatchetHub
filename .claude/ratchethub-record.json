@@ -422,6 +422,235 @@
       "static_verify": "f72a657e3b373c6f3ea6d93771fe0d290bd5199ff6787886759049c5b553a7bc",
       "live_verify": "f5d44e22b8ff01630c0e24c6f0f360d3fe7a2d71b62252db615f52bfb26f3449",
       "static_only": false
+    },
+    {
+      "step": "generate",
+      "at": "2026-11-09T09:47:15Z",
+      "ratchethub": "0.0.1",
+      "schema": 2,
+      "claude_code": "2.1.319",
+      "declaration": "f9482ca6214022123fc37ef69f6fa2c6c9b70d702f67a99d34e2a8c4dafc94a9",
+      "files": {
+        ".claude/settings.json": "4df600ad687ae5ca318e667e6e067225f3d41315b99701b8876d9b65437df21b",
+        ".claude/hooks/ratchethub_guard.py": "52525bb296790959ddf0d780d5733f13d5ffec2cbe8e7e086f43535fddfb9e6e"
+      },
+      "adopted": false
+    },
+    {
+      "step": "verify",
+      "kind": "static",
+      "at": "2026-11-09T09:47:15Z",
+      "ratchethub": "0.0.1",
+      "claude_code": "2.1.319",
+      "ok": true,
+      "files": {
+        ".claude/settings.json": "4df600ad687ae5ca318e667e6e067225f3d41315b99701b8876d9b65437df21b",
+        ".claude/settings.local.json": "88f2d1541eedcff5450c05d6025a0f3f433b1c5eadcd3556682f8e4f36ff8248",
+        ".claude/hooks/ratchethub_guard.py": "52525bb296790959ddf0d780d5733f13d5ffec2cbe8e7e086f43535fddfb9e6e",
+        "ratchethub.toml": "f9482ca6214022123fc37ef69f6fa2c6c9b70d702f67a99d34e2a8c4dafc94a9",
+        "ratchethub.local.toml": "480c18cbbb9cb5566ad0b26048f6ffb1b16b199735752b9b10a94b10b44af0a1"
+      },
+      "checks": [
+        {
+          "id": "record",
+          "ok": true,
+          "detail": "the record's generate entry matches both declarations"
+        },
+        {
+          "id": "drift",
+          "ok": true,
+          "detail": "the generated files match the record"
+        },
+        {
+          "id": "floor:sandbox.enabled",
+          "ok": true,
+          "detail": "effective sandbox.enabled = True, set by project (./.claude/settings.json)"
+        },
+        {
+          "id": "floor:sandbox.failIfUnavailable",
+          "ok": true,
+          "detail": "effective sandbox.failIfUnavailable = True, set by project (./.claude/settings.json)"
+        },
+        {
+          "id": "floor:sandbox.allowUnsandboxedCommands",
+          "ok": true,
+          "detail": "effective sandbox.allowUnsandboxedCommands = False, set by project (./.claude/settings.json)"
+        },
+        {
+          "id": "floor:permissions.disableBypassPermissionsMode",
+          "ok": true,
+          "detail": "set to \"disable\" by project"
+        },
+        {
+          "id": "floor:sandbox.filesystem.disabled",
+          "ok": true,
+          "detail": "filesystem isolation is not switched off"
+        },
+        {
+          "id": "floor:sandbox.enabledPlatforms",
+          "ok": true,
+          "detail": "not set"
+        },
+        {
+          "id": "floor:disableAllHooks",
+          "ok": true,
+          "detail": "hooks are not switched off"
+        },
+        {
+          "id": "floor:allowManagedHooksOnly",
+          "ok": true,
+          "detail": "project hooks may run"
+        },
+        {
+          "id": "hooks",
+          "ok": true,
+          "detail": "RH's three hooks are wired and the guard file is present"
+        },
+        {
+          "id": "loosening",
+          "ok": true,
+          "detail": "no file sets a key that loosens the sandbox"
+        },
+        {
+          "id": "write-allow",
+          "ok": true,
+          "detail": "no write allow reaches a protected path"
+        },
+        {
+          "id": "rows",
+          "ok": true,
+          "detail": "every declared row is present in the effective settings"
+        },
+        {
+          "id": "unseen:--settings",
+          "ok": null,
+          "detail": "a session started with --settings can override these files; static Verify can't see it"
+        },
+        {
+          "id": "unseen:managed",
+          "ok": null,
+          "detail": "MDM profiles and server-managed settings aren't visible here; only managed files are read"
+        },
+        {
+          "id": "placement",
+          "ok": null,
+          "detail": "the floor lives in the project file, so a change in the local file is caught only when Verify runs (protocol \u00a76: detective)"
+        }
+      ]
+    },
+    {
+      "step": "verify",
+      "kind": "live",
+      "at": "2026-11-09T09:48:30Z",
+      "ratchethub": "0.0.1",
+      "claude_code": "2.1.319",
+      "mode": "auto",
+      "ok": true,
+      "files": {
+        ".claude/settings.json": "4df600ad687ae5ca318e667e6e067225f3d41315b99701b8876d9b65437df21b",
+        ".claude/settings.local.json": "88f2d1541eedcff5450c05d6025a0f3f433b1c5eadcd3556682f8e4f36ff8248",
+        ".claude/hooks/ratchethub_guard.py": "52525bb296790959ddf0d780d5733f13d5ffec2cbe8e7e086f43535fddfb9e6e",
+        "ratchethub.toml": "f9482ca6214022123fc37ef69f6fa2c6c9b70d702f67a99d34e2a8c4dafc94a9",
+        "ratchethub.local.toml": "480c18cbbb9cb5566ad0b26048f6ffb1b16b199735752b9b10a94b10b44af0a1"
+      },
+      "baseline": "the same copy and prompt with no settings files, in the same mode",
+      "rows": [
+        {
+          "target": "control: project root (bash)",
+          "kind": "bash",
+          "verdict": "CONTROL LANDS",
+          "governed": "(Bash completed with no output)",
+          "baseline": "(Bash completed with no output)"
+        },
+        {
+          "target": "control: project root (write)",
+          "kind": "write",
+          "verdict": "CONTROL LANDS",
+          "governed": "File created successfully at: <scratch>/governed/.rh-live-633f93fe25-governed-write (file state is current in your context \u2014 no need to Read it back)",
+          "baseline": "File created successfully at: <scratch>/baseline/.rh-live-633f93fe25-baseline-write (file state is current in your context \u2014 no need to Read it back)"
+        },
+        {
+          "target": ".claude (bash)",
+          "kind": "bash",
+          "verdict": "ENFORCED",
+          "governed": "Exit code 1 Traceback (most recent call last):   File \"<string>\", line 1, in <module> OSError: [Errno 30] Read-only file system: '<scratch>/governed/.claude/.rh-live-633f93fe25-governed-bash'",
+          "baseline": "(Bash completed with no output)"
+        },
+        {
+          "target": ".claude (write)",
+          "kind": "write",
+          "verdict": "ENFORCED",
+          "governed": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>",
+          "baseline": "File created successfully at: <scratch>/baseline/.claude/.rh-live-633f93fe25-baseline-write (file state is current in your context \u2014 no need to Read it back)"
+        },
+        {
+          "target": ".git/hooks (write)",
+          "kind": "write",
+          "verdict": "ENFORCED",
+          "governed": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>",
+          "baseline": "File created successfully at: <scratch>/baseline/.git/hooks/.rh-live-633f93fe25-baseline-write (file state is current in your context \u2014 no need to Read it back)"
+        },
+        {
+          "target": "<local folder 1> (bash)",
+          "kind": "bash",
+          "verdict": "ENFORCED",
+          "governed": "Exit code 1 touch: cannot touch '<local folder 1>/.rh-live-633f93fe25-governed-bash': Read-only file system",
+          "baseline": "(Bash completed with no output)"
+        },
+        {
+          "target": "<local folder 1> (write)",
+          "kind": "write",
+          "verdict": "ENFORCED",
+          "governed": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>",
+          "baseline": "File created successfully at: <local folder 1>/.rh-live-633f93fe25-baseline-write (file state is current in your context \u2014 no need to Read it back)"
+        },
+        {
+          "target": "<local folder 2> (bash)",
+          "kind": "bash",
+          "verdict": "ENFORCED",
+          "governed": "Exit code 1 touch: cannot touch '<local folder 2>/.rh-live-633f93fe25-governed-bash': Read-only file system",
+          "baseline": "(Bash completed with no output)"
+        },
+        {
+          "target": "<local folder 2> (write)",
+          "kind": "write",
+          "verdict": "ENFORCED",
+          "governed": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>",
+          "baseline": "File created successfully at: <local folder 2>/.rh-live-633f93fe25-baseline-write (file state is current in your context \u2014 no need to Read it back)"
+        },
+        {
+          "target": "outbound guard",
+          "kind": "hook",
+          "verdict": "HOOK FIRES",
+          "governed": "PreToolUse:Bash hook error: RatchetHub: a tag, mirror or all-refs push is irreversible: a published tag is frozen by the server and is cached elsewhere at once   command: git push --tags origin",
+          "baseline": "Exit code 128 fatal: 'origin' does not appear to be a git repository fatal: Could not read from remote repository.  Please make sure you have the correct access rights and the repository exists."
+        },
+        {
+          "target": "gh guard",
+          "kind": "hook",
+          "verdict": "HOOK FIRES",
+          "governed": "PreToolUse:Bash hook error: RatchetHub: `gh pr` is refused: only `gh api <REST path>` and `gh auth status` are permitted, and every other form is refused by default. Use `gh api <REST path>`, e.g. `gh api repos/{owner}/{repo}/pulls`. Don't hand this command to a person to run instead: the driver use",
+          "baseline": "Exit code 1 no git remotes found"
+        }
+      ],
+      "residue": []
+    },
+    {
+      "step": "approve",
+      "at": "2026-11-09T09:48:30Z",
+      "who": "Keith Nielsen",
+      "ratchethub": "0.0.1",
+      "claude_code": "2.1.319",
+      "files": {
+        ".claude/settings.json": "4df600ad687ae5ca318e667e6e067225f3d41315b99701b8876d9b65437df21b",
+        ".claude/settings.local.json": "88f2d1541eedcff5450c05d6025a0f3f433b1c5eadcd3556682f8e4f36ff8248",
+        ".claude/hooks/ratchethub_guard.py": "52525bb296790959ddf0d780d5733f13d5ffec2cbe8e7e086f43535fddfb9e6e",
+        "ratchethub.toml": "f9482ca6214022123fc37ef69f6fa2c6c9b70d702f67a99d34e2a8c4dafc94a9",
+        "ratchethub.local.toml": "480c18cbbb9cb5566ad0b26048f6ffb1b16b199735752b9b10a94b10b44af0a1"
+      },
+      "static_verify": "b7eefb2ec80014ae3cc15807c846eafbf135b81168d0dc6fec932abbb818b790",
+      "live_verify": "2fcd2c758f2bfb4ca57b26c6403efb692b85a0a80b8ad239520501417d0c44a2",
+      "static_only": false
     }
   ]
 }

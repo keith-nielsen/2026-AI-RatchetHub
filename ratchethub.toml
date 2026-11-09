@@ -36,3 +36,4 @@ remotes_allowed = true
 [github]
 default_branch = "main"
 required_checks = ["test"]
+rulesets = [".github/rulesets/main.json"]
