@@ -1,7 +1,7 @@
 # Declaration schema: `ratchethub.toml`
 
-> **Status:** schema version 1 signed off by the operator, 2026-10-24. **Schema version 2 drafted
-> 2026-11-08, awaiting the operator's sign-off** (v1 scope §5, decision 1: `[writable]` only). Version 2
+> **Status:** schema version 1 signed off by the operator, 2026-10-24. **Schema version 2 signed
+> off by the operator, 2026-11-09** (v1 scope §5, decision 1: `[writable]`; `[github]` per scope §4). Version 2
 > also brings this text level with the generator, which already refused more than version 1 said
 > (§7). Implements charter C4 (extended by declaration) and C5 (only tightens).
 
@@ -242,7 +242,7 @@ folders = ["/srv/shared-datasets"]
 
 ## 7. What schema version 2 changes
 
-**Drafted 2026-11-08, awaiting the operator's sign-off.** One addition and a catch-up:
+**Signed off by the operator, 2026-11-09** (drafted 2026-11-08). One addition and a catch-up:
 
 1. **Added: `[writable]`** (§3), as ruled in v1 scope §5, decision 1. `[[exception]]` moves to
    schema 3. **Added: `[github]`** (§3), the declared platform state v1 scope §4 said would be

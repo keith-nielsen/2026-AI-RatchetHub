@@ -1,6 +1,6 @@
 # Residual conduct rules
 
-> **Status:** drafted 2026-11-08, awaiting the operator's sign-off. v1 scope A7.
+> **Status:** signed off by the operator, 2026-11-09 (drafted 2026-11-08). v1 scope A7.
 
 These are the rules no control RatchetHub (RH) generates can reach. They are **residue, not
 controls** (charter C6): nothing enforces them, and RH's report lists them under that heading so

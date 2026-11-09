@@ -1,7 +1,7 @@
 # The change protocol
 
 > **Status:** signed off by the operator, 2026-11-08; its three decisions ruled (§9, 2026-10-25).
-> **Amendment drafted 2026-11-08, awaiting the operator's sign-off (§10):** who records a verify
+> **Amendment signed off by the operator, 2026-11-09 (§10):** who records a verify
 > entry, what Approve requires, the guard file, the command for each step, and how live Verify
 > runs (from RH's first live Verify of itself). Details charter §3 (declare → generate → verify →
 > approve), adds standing exceptions (closing the gap in charter §4), and records where the floor
@@ -360,7 +360,7 @@ Facts the probes surfaced, not in the claims above:
    against local changes. The managed placement is recorded as considered and declined for v1, and
    the `--settings` launcher as the first candidate after v1.
 
-## 10. Amendment (drafted 2026-11-08, awaiting sign-off)
+## 10. Amendment (drafted 2026-11-08, signed off by the operator 2026-11-09)
 
 Found while building the steps. Each brings this text level with what the code does; none loosens
 anything.
