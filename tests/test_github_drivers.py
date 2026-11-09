@@ -260,3 +260,19 @@ def test_cli_pr_runs_the_driver_and_asserts(world, capsys):
         assert main(["--root", str(world.root), "pr", "--assert-head", "f" * 40, "--assert-pr", "1"]) == 1
     finally:
         rd.Reader.__init__ = orig
+
+
+@pytest.mark.parametrize("merge_state, want", [
+    ("clean", S.MERGEABLE), ("has_hooks", S.MERGEABLE),
+    ("blocked", S.NOT_MERGEABLE), ("behind", S.NOT_MERGEABLE), ("dirty", S.NOT_MERGEABLE),
+    ("unstable", S.NOT_MERGEABLE), ("unknown", S.CHECKS_PENDING), (None, S.CHECKS_PENDING),
+])
+def test_mergeable_needs_a_clean_merge_state_not_just_no_conflicts(world, merge_state, want):
+    """`mergeable: true` means no conflict; a ruleset can still refuse the merge (blocked), or the
+    head is out of date (behind). Values: GitHub's MergeStateStatus enum, lower-cased in REST."""
+    _pushed(world, GREEN)
+    world.set(pulls=[_pr(world, 1, mergeable_state=merge_state)])
+    st = S.derive(Reader(anon=offline), SLUG, "feat-x", "main", world.head)
+    assert st.state == want, (st.state, st.detail)
+    if want == S.NOT_MERGEABLE:
+        assert merge_state in st.detail

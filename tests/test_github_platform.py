@@ -184,3 +184,52 @@ def test_ruleset_change_sends_the_whole_ruleset_with_one_field_changed():
     assert payload == {**RULESET, "enforcement": "evaluate"}
     with pytest.raises(KeyError):
         P.ruleset_change(reader, "o/r", 7, "enforcment", "evaluate")
+
+
+# --- what GitHub hides from an anonymous read, and rule order ----------------------------------
+
+
+def _declare(root, ruleset):
+    (root / "rules" / "main.json").write_text(json.dumps(ruleset))
+
+
+def test_bypass_actors_hidden_from_the_read_are_unmeasured_not_drift_and_not_ok(root):
+    """REST 'Get a repository ruleset': bypass_actors is returned only to a caller with write access
+    to the ruleset. An anonymous read lacks it; that is no evidence either way."""
+    _declare(root, {**RULESET, "bypass_actors": []})
+    rows = by_item(P.reconcile(fake(routes()), "o/r", GH, root))
+    assert rows["ruleset main"].result == P.OK, rows["ruleset main"].detail
+    assert rows["ruleset main bypass_actors"].result == P.UNMEASURED
+    assert "write access" in rows["ruleset main bypass_actors"].detail
+
+
+def test_bypass_actors_that_are_visible_are_compared(root):
+    _declare(root, {**RULESET, "bypass_actors": []})
+    live = {**RULESET, "id": 7, "bypass_actors": [{"actor_type": "RepositoryRole", "actor_id": 5}]}
+    rows = by_item(P.reconcile(fake(routes(**{"/repos/o/r/rulesets/7": live})), "o/r", GH, root))
+    assert rows["ruleset main"].result == P.DRIFT and "bypass_actors" in rows["ruleset main"].detail
+    assert "ruleset main bypass_actors" not in rows
+
+
+def test_rule_order_is_not_drift_but_a_changed_rule_is(root):
+    rules = [{"type": "deletion"}, {"type": "non_fast_forward"}]
+    _declare(root, {**RULESET, "rules": rules})
+    swapped = {**RULESET, "id": 7, "rules": rules[::-1]}
+    assert by_item(P.reconcile(fake(routes(**{"/repos/o/r/rulesets/7": swapped})), "o/r", GH, root))[
+        "ruleset main"].result == P.OK
+    changed = {**RULESET, "id": 7, "rules": [{"type": "deletion"}, {"type": "creation"}]}
+    assert by_item(P.reconcile(fake(routes(**{"/repos/o/r/rulesets/7": changed})), "o/r", GH, root))[
+        "ruleset main"].result == P.DRIFT
+
+
+def test_the_committed_ruleset_is_what_the_declaration_names():
+    """RH's own repository: the declared ruleset file exists and requires the CI job by its real
+    name, from GitHub Actions (app id 15368, read from GET /apps/github-actions)."""
+    from pathlib import Path
+    import tomllib
+    repo = Path(__file__).resolve().parents[1]
+    rs = json.loads((repo / ".github/rulesets/main.json").read_text())
+    checks = [r for r in rs["rules"] if r["type"] == "required_status_checks"][0]["parameters"]
+    assert checks["required_status_checks"] == [{"context": "test", "integration_id": 15368}]
+    ci = (repo / ".github/workflows/ci.yml").read_text()
+    assert "\n  test:\n" in ci, "the required context is the CI job's name"

@@ -29,6 +29,21 @@ class Row:
     channel: str = ""
 
 
+# Fields GitHub leaves out of a read that lacks the right access. Absent from the read, they are
+# neither a match nor drift: REST "Get a repository ruleset" returns bypass_actors only to a caller
+# with write access to the ruleset, and RH reads anonymously.
+HIDDEN = {"bypass_actors": "GitHub returns bypass_actors only to a caller with write access to the "
+                           "ruleset (REST: Get a repository ruleset); this read can't see it"}
+
+
+def ruleset_content(obj: dict) -> dict:
+    """`content`, with the rule list in a fixed order: the API description promises no order."""
+    c = content(obj)
+    if isinstance(c.get("rules"), list):
+        c["rules"] = sorted(c["rules"], key=lambda r: json.dumps(r, sort_keys=True))
+    return c
+
+
 def content(obj):
     if isinstance(obj, dict):
         return {k: content(v) for k, v in sorted(obj.items()) if k not in VOLATILE}
@@ -69,12 +84,18 @@ def _rulesets(reader, slug, gh, root) -> list[Row]:
         have = live.get(name)
         if have is None:
             rows.append(Row(f"ruleset {name}", DRIFT, f"declared in {rel}, absent on GitHub", ch))
-        elif content(have) != content(want):
-            diff = sorted(k for k in set(content(have)) | set(content(want))
-                          if content(have).get(k) != content(want).get(k))
-            rows.append(Row(f"ruleset {name}", DRIFT, f"differs from {rel} in: {', '.join(diff)}", ch))
         else:
-            rows.append(Row(f"ruleset {name}", OK, f"matches {rel}", ch))
+            h, w = ruleset_content(have), ruleset_content(want)
+            unseen = [k for k in HIDDEN if k in w and k not in h]
+            for k in unseen:
+                del w[k]
+            diff = sorted(k for k in set(h) | set(w) if h.get(k) != w.get(k))
+            if diff:
+                rows.append(Row(f"ruleset {name}", DRIFT, f"differs from {rel} in: {', '.join(diff)}", ch))
+            else:
+                rows.append(Row(f"ruleset {name}", OK, f"matches {rel}"
+                                + (f" (not seen: {', '.join(unseen)})" if unseen else ""), ch))
+            rows += [Row(f"ruleset {name} {k}", UNMEASURED, HIDDEN[k], ch) for k in unseen]
     for name in sorted(set(live) - declared_names):
         rows.append(Row(f"ruleset {name}", DRIFT, "on GitHub, not declared", ch))
     return rows

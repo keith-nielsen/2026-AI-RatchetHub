@@ -13,6 +13,18 @@ from dataclasses import dataclass, field
 from .read import Reader, ReadError, summarize_checks
 
 # Route states, in lifecycle order.
+
+# REST mergeable_state carries GitHub's MergeStateStatus values, lower-cased (GraphQL schema enum;
+# the REST description gives only the example "clean"). Only these two say a merge will go through:
+# `mergeable: true` alone means no conflict, while a ruleset can still refuse the merge.
+READY_MERGE_STATES = ("clean", "has_hooks")
+MERGE_STATE_MEANING = {
+    "behind": "the head ref is out of date",
+    "blocked": "the merge is blocked (a ruleset or a required check)",
+    "dirty": "the merge commit cannot be cleanly created",
+    "unstable": "mergeable with a non-passing commit status",
+}
+
 NOT_PUSHED = "not-pushed"            # the branch has commits GitHub doesn't
 NO_PR = "no-pr"
 CLOSED_UNMERGED = "closed-unmerged"  # a closed PR exists: never propose a duplicate
@@ -124,6 +136,8 @@ def derive(reader: Reader, slug: str, branch: str, base: str, head: str | None,
     if pr.get("draft"):
         st.state = DRAFT
         return st
+    merge_state = (pr.get("mergeable_state") or None)
+    merge_state = merge_state.lower() if isinstance(merge_state, str) else None
     sha = (pr.get("head") or {}).get("sha") or remote_sha
     st.head_sha = sha
     try:
@@ -140,12 +154,14 @@ def derive(reader: Reader, slug: str, branch: str, base: str, head: str | None,
     elif pending or total == 0:
         st.state = CHECKS_PENDING
         st.detail = "no check has reported yet" if total == 0 else ""
-    elif pr.get("mergeable") is True:
-        st.state = MERGEABLE
-    elif pr.get("mergeable") is None:
+    elif pr.get("mergeable") is None or (pr.get("mergeable") and merge_state in (None, "unknown")):
         st.state, st.detail = CHECKS_PENDING, "GitHub is still computing mergeability"
+    elif pr.get("mergeable") is True and merge_state in READY_MERGE_STATES:
+        st.state = MERGEABLE
     else:
         st.state = NOT_MERGEABLE
+        st.detail = (f"merge state {merge_state}: {MERGE_STATE_MEANING.get(merge_state, 'not ready')}"
+                     if pr.get("mergeable") else "the merge commit can't be cleanly created")
     return st
 
 
