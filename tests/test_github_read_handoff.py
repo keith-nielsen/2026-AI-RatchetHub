@@ -174,9 +174,9 @@ def test_the_emitted_block_satisfies_the_relay_guard(repo):
     out = []
     line = h.emit(repo, "merge", 7, mnemonic="docs", has_assertion=True, out=out.append)
     message = "\n".join(out)
-    assert line.startswith("bash ") and line.endswith("# docs step:merge -> PR #7")
+    assert line.startswith("bash ") and line.split("  # ", 1)[1] in ("docs merge", "docs merge #7")
     assert guard.relay(message, str(repo)) is None
-    assert guard.relay(message.replace("# docs ", ""), str(repo)), "a dropped tag must be caught"
+    assert guard.relay(message.replace("# docs merge", "# merge"), str(repo)), "a dropped tag must be caught"
 
 
 def test_relay_line_shortens_home_paths(monkeypatch, repo):
@@ -190,3 +190,31 @@ def test_a_long_line_says_so(monkeypatch, tmp_path):
     out = []
     h.emit(deep, "merge", 1, has_assertion=False, out=out.append)
     assert any("columns" in line for line in out)
+
+
+def test_a_real_length_line_fits_with_the_run_prefix(monkeypatch, tmp_path):
+    """This repository's own path, under a home folder, with the operator's `! ` prefix: the
+    first real run printed 90 columns and asked the person to widen the terminal."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    repo = tmp_path / "Documents" / "repo" / "ratchethub"
+    repo.mkdir(parents=True)
+    for step, pr in (("create-pr", None), ("delete-branch", 123), ("merge", 9999)):
+        line = h.relay_line(repo, step, pr, mnemonic="s8")
+        assert len(h.RUN_PREFIX + line) <= h.MAX_WIDTH, (len(h.RUN_PREFIX + line), line)
+        out = []
+        h.emit(repo, step, pr, mnemonic="s8", has_assertion=False, out=out.append)
+        assert not any("columns" in o for o in out)
+    assert h.relay_line(repo, "merge", 7, mnemonic="s8").endswith("# s8 merge #7"), "the PR joins when it fits"
+
+
+def test_the_width_warning_counts_the_run_prefix(monkeypatch, tmp_path):
+    """A line that fits only without the `! ` prefix still wraps when run with it."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    repo = tmp_path / "r"
+    repo.mkdir()
+    base = len(h.relay_line(repo, "merge", None, mnemonic=""))
+    tag = "x" * (h.MAX_WIDTH - 1 - base)  # the bare line is MAX_WIDTH - 1 columns
+    assert len(h.relay_line(repo, "merge", None, mnemonic=tag)) == h.MAX_WIDTH - 1
+    out = []
+    h.emit(repo, "merge", None, mnemonic=tag, has_assertion=False, out=out.append)
+    assert any("columns" in o for o in out)

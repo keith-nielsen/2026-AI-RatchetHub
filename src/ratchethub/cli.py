@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -193,6 +194,14 @@ def _github(a):
     return slug, Reader(), gh
 
 
+def self_command(root: Path, step: str) -> str:
+    """How a plan re-runs this same RatchetHub: the interpreter and package that wrote it, so a
+    plan's verification works whether or not `ratchethub` is installed on the person's PATH."""
+    src = Path(__file__).resolve().parent.parent
+    return (f"PYTHONPATH={shlex.quote(str(src))} {shlex.quote(sys.executable)} -m ratchethub "
+            f"--root {shlex.quote(str(Path(root).resolve()))} {step}")
+
+
 def cmd_pr(a) -> int:
     from .github.driver import Driver
     from .github.state import git
@@ -200,7 +209,7 @@ def cmd_pr(a) -> int:
     slug, reader, gh = _github(a)
     base = a.base or (gh.default_branch if gh else "main")
     branch = a.branch or git(a.root, "branch", "--show-current").stdout.strip()
-    d = Driver(a.root, slug, reader)
+    d = Driver(a.root, slug, reader, driver_cmd=self_command(a.root, "pr"))
     if a.assert_head or a.assert_pr:
         ok = d.assert_state(branch, base, head=a.assert_head or "", pr=a.assert_pr or 0)
         print("state unchanged: proceeding" if ok else "GitHub has moved since this plan was written; stopping "
@@ -213,7 +222,8 @@ def cmd_release(a) -> int:
     from .github.driver import release
 
     slug, reader, gh = _github(a)
-    return release(a.root, slug, reader, tag=a.tag, notes_file=a.notes, default_branch=gh.default_branch if gh else "main")
+    return release(a.root, slug, reader, tag=a.tag, notes_file=a.notes, default_branch=gh.default_branch if gh else "main",
+                   driver_cmd=self_command(a.root, "release"))
 
 
 def cmd_preflight(a) -> int:

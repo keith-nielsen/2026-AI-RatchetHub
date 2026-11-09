@@ -8,7 +8,8 @@ read lags.
 Who runs each step:
 
 - agent: push the branch (printed, recorded for the outbound guard, run by the agent as Bash),
-  open the PR and delete a merged branch (REST writes the `gh` guard sanctions);
+  open the PR and delete a merged branch (REST writes the `gh` guard sanctions). Where the agent's
+  channel holds no GitHub credential, the push is the person's, and a failed write is handed over;
 - person: merge, tag and release, through the handoff file (G2), because each is irreversible.
 
 A mutation's own response outranks a lagging read. Verify reads retry on the measured ladder
@@ -149,7 +150,8 @@ class Driver:
         if st.state == S.NOT_PUSHED:
             cmd = push_command(self.root, branch)
             handoff.write_emission(self.root, "push", cmd, branch)
-            self._say(o, "next (agent): push the branch with exactly this command, then run the driver again:")
+            self._say(o, "next: push the branch with exactly this command, then run the driver again. The agent "
+                         "runs it if its channel holds a GitHub credential; otherwise a person does:")
             self._say(o, cmd)
             o.code = ACT
             return o
@@ -167,7 +169,7 @@ class Driver:
             except MutationError as exc:
                 return self._mutation_failed(o, "create-pr", branch, None,
                                              " ".join(map(shlex.quote, create_pr_argv(self.slug, branch, base, title,
-                                                                                      body_file))), exc)
+                                                                                      body_file))), exc, mnemonic)
             self._set_unconfirmed("create-pr", branch, resp)
             self._say(o, f"opened PR #{resp.get('number')} (from the mutation's own response)")
             st, ok = self._confirm("create-pr", lambda: S.derive(self.reader, self.slug, branch, base, head, resp),
@@ -217,7 +219,7 @@ class Driver:
                 self.write(delete_branch_argv(self.slug, branch))
             except MutationError as exc:
                 return self._mutation_failed(o, "delete-branch", branch, st.pr,
-                                             " ".join(delete_branch_argv(self.slug, branch)), exc)
+                                             " ".join(delete_branch_argv(self.slug, branch)), exc, mnemonic)
             self._say(o, f"PR #{st.pr} is merged; deleted the branch {branch} on GitHub")
             st, ok = self._confirm("delete-branch", lambda: S.derive(self.reader, self.slug, branch, base, None),
                                    lambda s: s.state == S.DONE)
@@ -232,13 +234,14 @@ class Driver:
             return o
         return o
 
-    def _mutation_failed(self, o: Outcome, step: str, branch: str, pr, cmd: str, exc: Exception) -> Outcome:
+    def _mutation_failed(self, o: Outcome, step: str, branch: str, pr, cmd: str, exc: Exception,
+                         mnemonic: str = "change") -> Outcome:
         """The agent's channel couldn't write (in a sandbox, `gh` often has no credential). Hand
         the same command to a person rather than retrying by another route."""
         self._say(o, f"the {step} write failed on the agent's channel: {exc}")
         handoff.write_plan(self.root, step=step, command=cmd, branch=branch, pr=pr,
                            verify_lines=[f"{self.driver_cmd} --branch {shlex.quote(branch)}"])
-        handoff.emit(self.root, step, pr, has_assertion=False, out=lambda s: self._say(o, s))
+        handoff.emit(self.root, step, pr, mnemonic=mnemonic, has_assertion=False, out=lambda s: self._say(o, s))
         o.code = HANDOFF
         return o
 

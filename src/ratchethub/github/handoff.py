@@ -27,6 +27,7 @@ from ..guard import EMISSION, RELAY_DIR, RELAY_LINE
 
 TTL = 24 * 60 * 60
 MAX_WIDTH = 80
+RUN_PREFIX = "! "  # how the operator runs a relayed line inside Claude Code; it counts toward the width
 STEP = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 
 
@@ -113,13 +114,16 @@ def mark_verified(root, step: str, pr: int | None) -> None:
 
 def relay_line(root, step: str, pr: int | None, mnemonic: str = "change") -> str:
     """The one line a person runs: flush left, its path shortened to `~/` under the home folder,
-    and a `#` tag naming the step so identical lines in history can be told apart."""
+    and a short `#` tag naming the change and the step, so identical lines in history can be told
+    apart. The PR number joins the tag only while the line still fits the terminal; the plan pins
+    the PR either way."""
     path = str(plan_path(Path(root).resolve()))
     home = os.path.expanduser("~")
     if path.startswith(home + "/"):
         path = "~" + path[len(home):]
-    target = f"PR #{pr}" if pr is not None else "no PR"
-    return f"bash {path}  # {mnemonic} step:{step} -> {target}"
+    line = f"bash {path}  # {mnemonic} {step}"
+    with_pr = f"{line} #{pr}" if pr is not None else line
+    return with_pr if len(RUN_PREFIX + with_pr) <= MAX_WIDTH else line
 
 
 def emit(root, step: str, pr: int | None, *, mnemonic: str = "change", has_assertion: bool, out=print) -> str:
@@ -136,8 +140,10 @@ def emit(root, step: str, pr: int | None, *, mnemonic: str = "change", has_asser
     out(line)
     out("```")
     out("END COPY")
-    if len(line) > MAX_WIDTH:
-        out(f"(the line is {len(line)} columns; widen the terminal so it doesn't wrap before copying)")
+    width = len(RUN_PREFIX) + len(line)
+    if width > MAX_WIDTH:
+        out(f"(the line is {width} columns with the `{RUN_PREFIX.strip()}` prefix; widen the terminal so it "
+            "doesn't wrap before copying)")
     out("It re-checks the state you were shown and stops without changing anything if GitHub has moved; "
         "it expires in 24 hours." if has_assertion else
         "It expires in 24 hours. This step has no PR state to re-check.")
