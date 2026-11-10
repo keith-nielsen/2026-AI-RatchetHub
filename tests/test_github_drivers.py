@@ -111,6 +111,22 @@ def test_pending_checks_run_the_ladder_then_hand_to_a_monitor(world):
     assert any(line.startswith("ratchethub pr --branch feat-x") for line in world.lines)
 
 
+def test_the_wait_reports_the_read_its_result_stands_on(world):
+    """On #1 the state block said checks-pending and the next line said mergeable: the block was
+    read before the wait. The read after the wait is now shown too."""
+    _pushed(world, [{"name": "ci", "status": "in_progress"}])
+    world.set(pulls=[_pr(world, 1)])
+    def checks_finish(seconds):
+        world.sleeps.append(seconds)
+        _pushed(world, GREEN)
+    world.driver.sleep = checks_finish
+    o = world.run()
+    assert o.code == D.ACT
+    after = world.lines.index("after the wait: mergeable (PR #1)")
+    assert world.lines.index("state: checks-pending (PR #1)") < after
+    assert "  checks: 1 runs, 0 pending, 0 failing [gh-api]" in world.lines[after:]
+
+
 def test_failing_checks_are_named(world):
     _pushed(world, [{"name": "lint", "status": "completed", "conclusion": "failure"}])
     world.set(pulls=[_pr(world, 1)])
