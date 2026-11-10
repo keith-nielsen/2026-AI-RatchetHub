@@ -146,6 +146,37 @@ def test_mark_verified_removes_the_plan_and_the_emission(repo):
     assert h.verified_marker(repo, "merge", 7).exists()
 
 
+def test_mark_verified_removes_the_relay_sidecar_and_its_block_mark(repo):
+    """A spent line left in the sidecar made the relay guard hold the next, unrelated copy block
+    to it (seen on the push after the first real create-pr)."""
+    plan(repo)
+    h.emit(repo, "merge", 7, has_assertion=True, out=lambda s: None)
+    (repo / guard.RELAY_MARK).write_text("x")
+    h.mark_verified(repo, "merge", 7)
+    assert not (repo / guard.RELAY_LINE).exists() and not (repo / guard.RELAY_MARK).exists()
+    assert guard.relay("START COPY\nbash other.sh  # x\nEND COPY", str(repo)) is None
+
+
+def test_markers_are_keyed_by_what_the_step_acted_on(repo):
+    m = h.verified_marker
+    assert m(repo, "create-pr", "feat-x") != m(repo, "create-pr", "feat-y")
+    assert m(repo, "create-pr", "a/b") != m(repo, "create-pr", "a_b"), "sanitising must not merge keys"
+    assert m(repo, "create-pr", "a/b").parent == repo / guard.RELAY_DIR / "verified", "no path escape"
+    assert m(repo, "tag", "../../x").parent == repo / guard.RELAY_DIR / "verified"
+    assert m(repo, "merge", 7).name == "merge-7"
+    for bad in (None, ""):
+        with pytest.raises(ValueError):
+            m(repo, "create-pr", bad)
+
+
+def test_a_plan_refuses_on_its_own_keyed_marker(repo):
+    path = h.write_plan(repo, step="create-pr", command="true", branch="feat-x", pr=None,
+                        verify_lines=["true"], key="feat-x")
+    assert str(h.verified_marker(repo, "create-pr", "feat-x")) in path.read_text()
+    with pytest.raises(ValueError):
+        h.write_plan(repo, step="create-pr", command="true", branch="feat-x", pr=None, verify_lines=["true"])
+
+
 def test_a_failing_assertion_stops_before_the_mutation(repo):
     plan(repo, assert_lines=["false"])
     assert run_plan(repo).returncode != 0 and not (repo / "mutated.txt").exists()

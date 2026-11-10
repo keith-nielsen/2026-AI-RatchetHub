@@ -6,8 +6,9 @@ corrupted long commands, so only the short line is typed. The file pins:
 
 - the **branch**, **step id** and **PR number**, for the mutation and for its verification;
 - an expiry (24 hours: an approval doesn't outlive the state it was given for);
-- a refusal once its step has verified: the driver writes `.git/ratchethub/verified/<step>`, and the
-  file refuses to run when that marker exists. Marking a step verified also removes the file.
+- a refusal once its step has verified: the driver writes `.git/ratchethub/verified/<step>-<key>`
+  (the key is the PR number, else the branch or tag), and the file refuses to run when that marker
+  exists. Marking a step verified also removes the file and the relay sidecar.
 
 Agent-run steps never get a file (ruled: the agent re-runs the driver). The relay line is written to
 the sidecar the relay guard compares against, and the emission record the outbound guard reads.
@@ -16,6 +17,7 @@ Paths are `guard.py`'s own, so the three can't drift apart.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -23,7 +25,7 @@ import shlex
 import time
 from pathlib import Path
 
-from ..guard import EMISSION, RELAY_DIR, RELAY_LINE
+from ..guard import EMISSION, RELAY_DIR, RELAY_LINE, RELAY_MARK
 
 TTL = 24 * 60 * 60
 MAX_WIDTH = 80
@@ -35,8 +37,15 @@ def plan_path(root) -> Path:
     return Path(root) / RELAY_DIR / "next.sh"
 
 
-def verified_marker(root, step: str, pr: int | None) -> Path:
-    return Path(root) / RELAY_DIR / "verified" / f"{step}-{pr if pr is not None else 'none'}"
+def verified_marker(root, step: str, key: int | str | None) -> Path:
+    """The marker one plan refuses on. `key` names what the step acted on (a PR number, else the
+    branch or tag), so a step done once for one change can't spend the same step for another."""
+    if key is None or str(key) == "":
+        raise ValueError(f"step {step!r} needs a key (a PR number, branch or tag) for its marker")
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(key))
+    if safe != str(key):  # `a/b` and `a_b` must not share a marker
+        safe += "." + hashlib.sha256(str(key).encode()).hexdigest()[:10]
+    return Path(root) / RELAY_DIR / "verified" / f"{step}-{safe}"
 
 
 def write_emission(root, step: str, command: str, branch: str, *, now: float | None = None) -> Path | None:
@@ -53,7 +62,8 @@ def write_emission(root, step: str, command: str, branch: str, *, now: float | N
 
 
 def write_plan(root, *, step: str, command: str, branch: str, pr: int | None, verify_lines: list[str],
-               assert_lines: list[str] | None = None, foreign: bool = False, now: float | None = None) -> Path:
+               assert_lines: list[str] | None = None, foreign: bool = False, now: float | None = None,
+               key: int | str | None = None) -> Path:
     """Write the person's step. Refuses a plan it can't guard: no branch, a bad step id, or a
     foreign branch (no local copy, so no checkout to compare) without a state assertion."""
     if not branch:
@@ -65,7 +75,7 @@ def write_plan(root, *, step: str, command: str, branch: str, pr: int | None, ve
     if not verify_lines:
         raise ValueError("a plan must verify its own step after the mutation")
     root = Path(root).resolve()
-    marker = verified_marker(root, step, pr)
+    marker = verified_marker(root, step, key if key is not None else pr)
     expiry = int((now or time.time()) + TTL)
     body = [
         "#!/usr/bin/env bash",
@@ -99,13 +109,14 @@ def write_plan(root, *, step: str, command: str, branch: str, pr: int | None, ve
     return path
 
 
-def mark_verified(root, step: str, pr: int | None) -> None:
-    """The step verified: write the marker the plan refuses on, and remove the plan and the
-    emission record, so a spent command isn't left where a later one can match it."""
-    marker = verified_marker(root, step, pr)
+def mark_verified(root, step: str, key: int | str) -> None:
+    """The step verified: write the marker the plan refuses on, and remove the plan, the emission
+    record and the relay sidecar (with its block mark), so a spent command isn't left where a later
+    one can match it, and the relay guard doesn't hold a later copy block to a spent line."""
+    marker = verified_marker(root, step, key)
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + "\n")
-    for p in (plan_path(root), Path(root) / EMISSION):
+    for p in (plan_path(root), Path(root) / EMISSION, Path(root) / RELAY_LINE, Path(root) / RELAY_MARK):
         try:
             p.unlink()
         except FileNotFoundError:
