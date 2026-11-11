@@ -3,7 +3,8 @@
 
 State file: $FAKE_GH_STATE. Every call is appended to $FAKE_GH_STATE.calls (argv as JSON), so tests
 check the command shape the driver really ran. `lag` (an integer) hides a newly created PR from
-that many list reads, as GitHub's read view lags a write.
+that many list reads, as GitHub's read view lags a write. `lag_on_merge` does the same for a merge:
+for that many PR-list reads after it, every read of the PR shows it as it was before the merge.
 """
 import json, os, re, sys
 
@@ -35,6 +36,13 @@ while i < len(argv):
 if st.get("unauthenticated") and method != "GET":
     fail(401, "Bad credentials")
 p = endpoint.split("?")[0]
+
+def view(pr):
+    """A PR as the lagging read view shows it: unmerged and open while `merge_lag` lasts."""
+    if st.get("merge_lag") and pr.get("number") == st.get("merged_number"):
+        return {**pr, "state": "open", "merged": False, "merged_at": None, "merge_commit_sha": None}
+    return pr
+
 m = re.fullmatch(r"repos/([^/]+/[^/]+)/(.*)", p)
 rest = m.group(2) if m else p
 out = None
@@ -52,6 +60,9 @@ if method == "GET":
         base = q.get("base")
         out = [pr for pr in st["pulls"] if (not head or pr["head"]["ref"] == head)
                and (not base or pr["base"]["ref"] == base) and (q.get("state") == "all" or pr["state"] == q.get("state"))]
+        out = [view(pr) for pr in out]
+        if st.get("merge_lag"):
+            st["merge_lag"] -= 1; save()
         if st.get("lag"):
             hidden = st["pulls"][-1]["number"] if st["pulls"] else None
             out = [pr for pr in out if pr["number"] != hidden]
@@ -60,6 +71,7 @@ if method == "GET":
         out = next((pr for pr in st["pulls"] if pr["number"] == int(rest.split("/")[1])), None)
         if out is None:
             fail(404, "Not Found")
+        out = view(out)
     elif re.fullmatch(r"commits/[^/]+/check-runs", rest):
         out = {"check_runs": st["checks"].get(rest.split("/")[1], [])}
     elif rest == "actions/runs":
@@ -76,6 +88,19 @@ elif method == "POST" and rest == "pulls":
           "mergeable": True, "mergeable_state": "clean", "title": fields["title"], "body": fields.get("body", ""),
           "head": {"ref": fields["head"], "sha": st["branches"].get(fields["head"])}, "base": {"ref": fields["base"]}}
     st["pulls"].append(pr); st["lag"] = st.get("lag_on_create", 0); save(); out = pr
+elif method == "PUT" and re.fullmatch(r"pulls/\d+/merge", rest):
+    n = int(rest.split("/")[1])
+    pr = next((x for x in st["pulls"] if x["number"] == n), None)
+    if pr is None:
+        fail(404, "Not Found")
+    if pr["state"] != "open" or pr.get("merged"):
+        fail(405, "Pull Request is not mergeable")
+    if fields.get("sha") and fields["sha"] != pr["head"]["sha"]:
+        fail(409, "Head branch was modified. Review and try the merge again.")
+    pr.update(state="closed", merged=True, merged_at="2026-11-10T00:00:00Z", merge_commit_sha="m1")
+    st["branches"][pr["base"]["ref"]] = "m1"
+    st["merge_lag"], st["merged_number"] = st.get("lag_on_merge", 0), n
+    save(); out = {"sha": "m1", "merged": True, "message": "Pull Request successfully merged"}
 elif method == "DELETE" and rest.startswith("git/refs/heads/"):
     st["branches"].pop(rest[len("git/refs/heads/"):], None); save(); out = None
 else:

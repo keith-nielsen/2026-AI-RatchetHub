@@ -215,6 +215,10 @@ def cmd_pr(a) -> int:
         print("state unchanged: proceeding" if ok else "GitHub has moved since this plan was written; stopping "
               "without changing anything. Run the driver again.")
         return 0 if ok else 1
+    if a.after:
+        return d.verify_after(branch, base, a.after, pr=a.pr).code
+    if a.pr is not None:
+        raise SystemExit("ratchethub: --pr goes with --after")
     return d.run(branch, base, title=a.title or "", body_file=a.body_file or "", mnemonic=a.tag or "change").code
 
 
@@ -223,7 +227,7 @@ def cmd_release(a) -> int:
 
     slug, reader, gh = _github(a)
     return release(a.root, slug, reader, tag=a.tag, notes_file=a.notes, default_branch=gh.default_branch if gh else "main",
-                   driver_cmd=self_command(a.root, "release"))
+                   driver_cmd=self_command(a.root, "release"), after=a.after)
 
 
 def cmd_preflight(a) -> int:
@@ -279,10 +283,14 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--tag", help="a short name for the change, used in the handoff line's tag")
     pr.add_argument("--assert-head")
     pr.add_argument("--assert-pr", type=int)
-    pr.add_argument("--after", help="the step the plan just ran; the driver re-derives the state")
+    pr.add_argument("--after", choices=("create-pr", "merge", "delete-branch"),
+                    help="a plan's verification: confirm this step took effect, and do nothing else")
+    pr.add_argument("--pr", type=int, help="with --after: the PR the step was for")
     rel = sub.add_parser("release", help="the release driver")
     rel.add_argument("--tag", required=True)
     rel.add_argument("--notes", required=True)
+    rel.add_argument("--after", choices=("tag", "release"),
+                     help="a plan's verification: confirm this step took effect, and do nothing else")
     pf = sub.add_parser("preflight", help="the checks run before every push")
     pf.add_argument("--base")
     sub.add_parser("platform", help="compare GitHub with the declared platform state (read-only)")

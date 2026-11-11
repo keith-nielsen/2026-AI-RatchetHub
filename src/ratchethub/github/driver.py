@@ -12,6 +12,10 @@ Who runs each step:
   channel holds no GitHub credential, the push is the person's, and a failed write is handed over;
 - person: merge, tag and release, through the handoff file (G2), because each is irreversible.
 
+A plan's verification line (`--after <step>`) only confirms its own step: it re-reads on the
+ladder, marks the step verified, and never writes to GitHub or plans the next step, so a plan does
+exactly the one mutation it announces.
+
 A mutation's own response outranks a lagging read. Verify reads retry on the measured ladder
 (5, 8 and 13 seconds) and then hand over to a monitor. Every command the driver runs or prints is
 built here, in its final shape, so the tests check the shape the agent and the person actually see.
@@ -37,6 +41,14 @@ UNCONFIRMED = Path(RELAY_DIR) / "unconfirmed.json"
 LAG_LOG = Path(RELAY_DIR) / "lag.jsonl"
 SUPPRESS_SECONDS = 120
 OUTCOMES = ("confirmed", "lagging", "exhausted")  # one sequence: lagging*, then exactly one terminal
+# A person's step, and the route states that show it took effect. The create-pr marker is keyed
+# without a PR number, because the plan was written before the PR had one.
+AFTER = {
+    "create-pr": (S.DRAFT, S.CHECKS_PENDING, S.CHECKS_FAILING, S.NOT_MERGEABLE, S.MERGEABLE, S.QUEUED,
+                  S.MERGED_BRANCH_PRESENT, S.DONE),
+    "merge": (S.MERGED_BRANCH_PRESENT, S.DONE),
+    "delete-branch": (S.DONE,),
+}
 
 
 class MutationError(RuntimeError):
@@ -190,9 +202,15 @@ class Driver:
         if st.state in (S.CHECKS_PENDING, S.QUEUED):
             if st.state == S.QUEUED:
                 self._say(o, "the PR is queued to merge; a queued merge is not merged")
+            self._say(o, f"waiting for checks, re-reading on the {'/'.join(map(str, LADDER))}s ladder")
             st, ok = self._confirm("checks", lambda: S.derive(self.reader, self.slug, branch, base, head),
                                    lambda s: s.state not in (S.CHECKS_PENDING, S.QUEUED))
             o.state = st
+            # The state block above was read before the wait: show the read the result stands on.
+            self._say(o, f"after the wait: {st.state}" + (f" (PR #{st.pr})" if st.pr else "")
+                      + (f": {st.detail}" if st.detail else ""))
+            for layer in st.layers:
+                self._say(o, f"  {layer.name}: {layer.value} [{layer.channel}]")
             if not ok:
                 self._say(o, f"still {st.state} after the {'/'.join(map(str, LADDER))}s ladder; hand over to a monitor:")
                 self._say(o, f"{self.driver_cmd} --branch {shlex.quote(branch)}")
@@ -205,7 +223,7 @@ class Driver:
             self._clear_unconfirmed()
             cmd = merge_command(self.slug, st.pr, st.head_sha)
             assert_line = f"{self.driver_cmd} --branch {shlex.quote(branch)} --assert-head {st.head_sha} --assert-pr {st.pr}"
-            verify_line = f"{self.driver_cmd} --branch {shlex.quote(branch)} --after merge"
+            verify_line = f"{self.driver_cmd} --branch {shlex.quote(branch)} --after merge --pr {st.pr}"
             handoff.write_plan(self.root, step="merge", command=cmd, branch=branch, pr=st.pr,
                                verify_lines=[verify_line], assert_lines=[assert_line])
             self._say(o, f"PR #{st.pr} is green and mergeable at {st.head_sha[:12]}. Merging is a person's step.")
@@ -239,10 +257,41 @@ class Driver:
         """The agent's channel couldn't write (in a sandbox, `gh` often has no credential). Hand
         the same command to a person rather than retrying by another route."""
         self._say(o, f"the {step} write failed on the agent's channel: {exc}")
-        handoff.write_plan(self.root, step=step, command=cmd, branch=branch, pr=pr,
-                           verify_lines=[f"{self.driver_cmd} --branch {shlex.quote(branch)}"])
+        verify = f"{self.driver_cmd} --branch {shlex.quote(branch)} --after {step}" + (f" --pr {pr}" if pr is not None else "")
+        handoff.write_plan(self.root, step=step, command=cmd, branch=branch, pr=pr, verify_lines=[verify],
+                           key=pr if pr is not None else branch)
         handoff.emit(self.root, step, pr, mnemonic=mnemonic, has_assertion=False, out=lambda s: self._say(o, s))
         o.code = HANDOFF
+        return o
+
+    def verify_after(self, branch: str, base: str, step: str, *, pr: int | None = None) -> Outcome:
+        """A plan's verification line: confirm that the person's step took effect, and nothing
+        else. It re-reads on the ladder (a read straight after a write lags), marks the step
+        verified, and never writes to GitHub or plans the next step, so the plan does exactly the
+        one mutation it announces. The agent's next run carries on from the new state."""
+        want = AFTER.get(step)
+        if want is None:
+            raise ValueError(f"no verification for step {step!r}; known: {', '.join(AFTER)}")
+        head = S.local_head(self.root)
+        st, ok = self._confirm(step, lambda: S.derive(self.reader, self.slug, branch, base, head),
+                               lambda s: s.state in want and s.pr is not None and (pr is None or s.pr == pr))
+        o = Outcome(PENDING, st)
+        self._say(o, f"after {step}: state {st.state}" + (f" (PR #{st.pr})" if st.pr else "")
+                  + (f": {st.detail}" if st.detail else ""))
+        for layer in st.layers:
+            self._say(o, f"  {layer.name}: {layer.value} [{layer.channel}]")
+        if not ok:
+            self._say(o, f"GitHub doesn't show the {step} yet (after the {'/'.join(map(str, LADDER))}s ladder). "
+                         "Nothing was changed; run this same line again shortly:")
+            self._say(o, f"{self.driver_cmd} --branch {shlex.quote(branch)} --after {step}"
+                      + (f" --pr {pr}" if pr is not None else ""))
+            o.code = BLOCKED if st.state == S.UNREAD else PENDING
+            return o
+        handoff.mark_verified(self.root, step, branch if step == "create-pr" else st.pr)
+        self._clear_unconfirmed()
+        self._say(o, f"verified: {step}" + (f" (PR #{st.pr})" if st.pr else "")
+                  + ". Nothing more was done here; the driver's next run takes the next step.")
+        o.code = DONE
         return o
 
     def assert_state(self, branch: str, base: str, *, head: str, pr: int) -> bool:
@@ -255,8 +304,15 @@ class Driver:
 
 
 def release(root: Path, slug: str, reader: Reader, *, tag: str, notes_file: str, default_branch: str,
-            out: Callable[[str], None] = print, driver_cmd: str = "ratchethub release") -> int:
-    """Level-triggered like the PR driver. Tagging and releasing are both a person's steps."""
+            out: Callable[[str], None] = print, driver_cmd: str = "ratchethub release",
+            after: str | None = None, sleep: Callable[[float], None] = time.sleep) -> int:
+    """Level-triggered like the PR driver. Tagging and releasing are both a person's steps.
+
+    `after` is a plan's verification of its own step (`tag` or `release`): it re-reads on the
+    ladder until GitHub shows the step, marks it verified, and plans nothing, so a lagging read
+    straight after the step can't hand the same step over again."""
+    if after is not None and after not in ("tag", "release"):
+        raise ValueError(f"no release verification for step {after!r}; known: tag, release")
     root = Path(root).resolve()
     branch = subprocess.run(["git", "-C", str(root), "branch", "--show-current"], capture_output=True,
                             text=True).stdout.strip()
@@ -267,19 +323,41 @@ def release(root: Path, slug: str, reader: Reader, *, tag: str, notes_file: str,
     if dirty.strip():
         out("the working tree has uncommitted changes; a release is cut from a clean tree")
         return BLOCKED
-    try:
+
+    def read():
         tags, ch = reader.get(f"/repos/{slug}/tags?per_page=100")
         releases, _ = reader.get(f"/repos/{slug}/releases?per_page=100")
+        return (any(t.get("name") == tag for t in tags),
+                any(r.get("tag_name") == tag and not r.get("draft") for r in releases), ch)
+
+    def shows(has_tag: bool, has_release: bool) -> bool:
+        return has_tag and (after == "tag" or has_release)
+
+    try:
+        has_tag, has_release, ch = read()
+        if after is not None:
+            for wait in LADDER:
+                if shows(has_tag, has_release):
+                    break
+                sleep(wait)
+                has_tag, has_release, ch = read()
     except Exception as exc:  # noqa: BLE001 - a failed read is no answer
         out(f"a read failed, so there is no release state to act on: {exc}")
         return BLOCKED
-    has_tag = any(t.get("name") == tag for t in tags)
-    has_release = any(r.get("tag_name") == tag and not r.get("draft") for r in releases)
     out(f"release state for {tag}: tag {'present' if has_tag else 'absent'}, release "
         f"{'present' if has_release else 'absent'} [{ch}]")
-    verify = f"{driver_cmd} --tag {shlex.quote(tag)} --notes {shlex.quote(notes_file)}"
+    if after is not None:
+        if not shows(has_tag, has_release):
+            out(f"GitHub doesn't show the {after} for {tag} yet (after the {'/'.join(map(str, LADDER))}s "
+                "ladder). Nothing was changed; run this same line again shortly:")
+            out(f"{driver_cmd} --tag {shlex.quote(tag)} --notes {shlex.quote(notes_file)} --after {after}")
+            return PENDING
+        handoff.mark_verified(root, after, tag)
+        out(f"verified: {after} for {tag}. Nothing more was done here; the driver's next run takes the next step.")
+        return DONE
     if has_tag and has_release:
-        handoff.mark_verified(root, "release", None)
+        handoff.mark_verified(root, "tag", tag)
+        handoff.mark_verified(root, "release", tag)
         out(f"done: {tag} is tagged and released")
         return DONE
     if not has_tag:
@@ -287,13 +365,15 @@ def release(root: Path, slug: str, reader: Reader, *, tag: str, notes_file: str,
                             f"git -C {shlex.quote(str(root))} push origin refs/tags/{shlex.quote(tag)}")
         prose = f"Tag {tag} on {default_branch} and push the tag. A pushed tag is permanent."
     else:
+        handoff.mark_verified(root, "tag", tag)  # the tag is on GitHub: its plan is spent
         if not Path(notes_file).is_file():
             out(f"the release notes file {notes_file} doesn't exist")
             return BLOCKED
         step, cmd = "release", (f"gh api -X POST repos/{slug}/releases -f tag_name={shlex.quote(tag)} "
                                 f"-f name={shlex.quote(tag)} -F body=@{shlex.quote(notes_file)}")
         prose = f"Publish the GitHub release for {tag}. A published release is cached and mirrored at once."
-    handoff.write_plan(root, step=step, command=cmd, branch=default_branch, pr=None, verify_lines=[verify])
+    verify = f"{driver_cmd} --tag {shlex.quote(tag)} --notes {shlex.quote(notes_file)} --after {step}"
+    handoff.write_plan(root, step=step, command=cmd, branch=default_branch, pr=None, verify_lines=[verify], key=tag)
     out("What this step does (prose, not to run):")
     out(f"  {prose}")
     out("What to run (the executable line):")

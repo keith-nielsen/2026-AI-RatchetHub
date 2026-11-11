@@ -111,6 +111,22 @@ def test_pending_checks_run_the_ladder_then_hand_to_a_monitor(world):
     assert any(line.startswith("ratchethub pr --branch feat-x") for line in world.lines)
 
 
+def test_the_wait_reports_the_read_its_result_stands_on(world):
+    """On #1 the state block said checks-pending and the next line said mergeable: the block was
+    read before the wait. The read after the wait is now shown too."""
+    _pushed(world, [{"name": "ci", "status": "in_progress"}])
+    world.set(pulls=[_pr(world, 1)])
+    def checks_finish(seconds):
+        world.sleeps.append(seconds)
+        _pushed(world, GREEN)
+    world.driver.sleep = checks_finish
+    o = world.run()
+    assert o.code == D.ACT
+    after = world.lines.index("after the wait: mergeable (PR #1)")
+    assert world.lines.index("state: checks-pending (PR #1)") < after
+    assert "  checks: 1 runs, 0 pending, 0 failing [gh-api]" in world.lines[after:]
+
+
 def test_failing_checks_are_named(world):
     _pushed(world, [{"name": "lint", "status": "completed", "conclusion": "failure"}])
     world.set(pulls=[_pr(world, 1)])
@@ -248,6 +264,7 @@ def test_release_publishes_once_tagged(main_repo):
     w.set(tags=[{"name": "v1.0.0"}])
     assert _release(w, notes) == D.HANDOFF
     assert "repos/o/r/releases -f tag_name=v1.0.0" in handoff.plan_path(w.root).read_text()
+    assert handoff.verified_marker(w.root, "tag", "v1.0.0").exists(), "the tag is on GitHub: its plan is spent"
 
 
 def test_release_done_when_tag_and_release_exist(main_repo):
@@ -317,7 +334,7 @@ def test_cli_pr_plans_verify_with_the_same_ratchethub(world):
     finally:
         rd.Reader.__init__ = orig
     plan = handoff.plan_path(world.root).read_text().splitlines()
-    assert self_command(world.root, "pr") + " --branch feat-x" in plan
+    assert self_command(world.root, "pr") + " --branch feat-x --after create-pr" in plan
 
 
 def test_cli_release_plans_verify_with_the_same_ratchethub(main_repo):
@@ -337,3 +354,228 @@ def test_cli_release_plans_verify_with_the_same_ratchethub(main_repo):
         rd.Reader.__init__ = orig
     plan = handoff.plan_path(w.root).read_text().splitlines()
     assert any(line.startswith(self_command(w.root, "release") + " --tag v1.0.0") for line in plan), plan
+
+
+# --- a plan's verification confirms its own step and does nothing else ---------------------------
+
+
+def _cli_world(w):
+    """Make `world` a repo the CLI accepts, and drive it through `self_command`, as a real plan does."""
+    from ratchethub.cli import self_command
+    subprocess.run(["git", "-C", str(w.root), "remote", "add", "origin", "https://github.com/o/r.git"], check=True)
+    (w.root / ".git" / "info" / "exclude").write_text("ratchethub.toml\n")
+    (w.root / "ratchethub.toml").write_text('[ratchethub]\nschema = 2\n[project]\nname = "p"\n'
+                                            '[github]\ndefault_branch = "main"\n')
+    w.driver.driver_cmd = self_command(w.root, "pr")
+
+
+def _run_plan(w):
+    """Run next.sh as the person does. The anonymous channel is pointed at a closed port, so every
+    read the plan's own driver run makes falls back to the fake `gh`."""
+    env = {**os.environ, "HTTPS_PROXY": "http://127.0.0.1:9", "https_proxy": "http://127.0.0.1:9",
+           "NO_PROXY": "", "no_proxy": ""}
+    return subprocess.run(["bash", str(handoff.plan_path(w.root))], env=env, capture_output=True, text=True,
+                          timeout=120)
+
+
+def _no_sleep_ladder(monkeypatch):
+    """In-process only: a plan's own driver run is a subprocess and waits on the real ladder."""
+    monkeypatch.setattr(D, "LADDER", (0, 0, 0))
+
+
+def test_the_merge_plan_survives_a_lagging_read_and_does_only_the_merge(world, monkeypatch):
+    """PR #1's real run: the read straight after the merge still showed the PR open, so the plan's
+    verification wrote a fresh merge plan; on a current read it would have deleted the branch,
+    a mutation the plan never announced. Now it waits out the lag and only confirms."""
+    _no_sleep_ladder(monkeypatch)
+    _cli_world(world)
+    _pushed(world, GREEN)
+    world.set(pulls=[_pr(world, 1)], lag_on_merge=2)
+    assert world.run(mnemonic="t").code == D.HANDOFF
+    r = _run_plan(world)
+    assert r.returncode == 0, r.stdout + r.stderr
+    g = world.gh()
+    assert g["pulls"][0]["merged"] and "feat-x" in g["branches"], "merged, and the branch left for the next run"
+    writes = [c for c in world.calls() if "-X" in c]
+    assert [c[2] for c in writes] == ["PUT"], writes
+    assert "verified: merge (PR #1)" in r.stdout
+    assert "[gh-api]" in r.stdout and "[anon-rest]" not in r.stdout, "the plan's reads reached the fake, not GitHub"
+    log = [json.loads(x) for x in (world.root / D.LAG_LOG).read_text().splitlines() if '"merge"' in x]
+    assert log[0]["outcome"] == "lagging" and log[-1]["outcome"] == "confirmed", "the lag was real and waited out"
+    assert handoff.verified_marker(world.root, "merge", 1).exists()
+    assert not handoff.plan_path(world.root).exists() and not (world.root / guard.RELAY_LINE).exists()
+
+
+def test_the_next_run_after_a_verified_merge_deletes_the_branch(world, monkeypatch):
+    _no_sleep_ladder(monkeypatch)
+    _cli_world(world)
+    _pushed(world, GREEN)
+    world.set(pulls=[_pr(world, 1)])
+    world.run()
+    assert _run_plan(world).returncode == 0
+    o = world.run()
+    assert o.code == D.DONE and "feat-x" not in world.gh()["branches"]
+
+
+def test_a_handed_over_delete_plan_verifies_and_is_then_spent(world, monkeypatch):
+    _no_sleep_ladder(monkeypatch)
+    _cli_world(world)
+    _pushed(world, GREEN)
+    world.set(pulls=[_pr(world, 1, state="closed", merged=True, merged_at="2026-11-08T00:00:00Z")],
+              unauthenticated=True)
+    assert world.run(mnemonic="t").code == D.HANDOFF
+    plan = handoff.plan_path(world.root).read_text()
+    assert "--after delete-branch --pr 1" in plan
+    world.set(unauthenticated=False)
+    r = _run_plan(world)
+    assert r.returncode == 0 and "verified: delete-branch (PR #1)" in r.stdout, r.stdout + r.stderr
+    handoff.plan_path(world.root).write_text(plan)  # a kept copy of the spent plan
+    calls = len(world.calls())
+    again = _run_plan(world)
+    assert again.returncode == 1 and "already verified" in again.stderr
+    assert len(world.calls()) == calls, "the spent copy made no call at all"
+
+
+def test_a_handed_over_create_pr_plan_is_spent_once_the_pr_exists(world, monkeypatch):
+    """PR #1's create plan was never marked spent: the PR went straight to checks-pending, and
+    only the no-PR path could have marked it. The plan's own verification marks it now."""
+    _no_sleep_ladder(monkeypatch)
+    _cli_world(world)
+    _pushed(world, [{"name": "ci", "status": "in_progress"}])
+    world.set(unauthenticated=True)
+    assert world.run(mnemonic="t").code == D.HANDOFF
+    plan = handoff.plan_path(world.root).read_text()
+    world.set(unauthenticated=False)
+    r = _run_plan(world)
+    assert r.returncode == 0 and "verified: create-pr (PR #1)" in r.stdout, r.stdout + r.stderr
+    assert len(world.gh()["pulls"]) == 1
+    handoff.plan_path(world.root).write_text(plan)
+    calls = len(world.calls())
+    again = _run_plan(world)
+    assert again.returncode == 1 and "already verified" in again.stderr
+    assert len(world.calls()) == calls and len(world.gh()["pulls"]) == 1, "the kept copy opened no second PR"
+
+
+def test_a_spent_create_pr_does_not_spend_another_branchs(world, monkeypatch):
+    """Keyed `create-pr-none`, the first verified create would have refused every later branch's."""
+    _no_sleep_ladder(monkeypatch)
+    _cli_world(world)
+    _pushed(world, GREEN)
+    world.set(unauthenticated=True)
+    world.run()
+    world.set(unauthenticated=False)
+    assert _run_plan(world).returncode == 0
+    subprocess.run(["git", "-C", str(world.root), "checkout", "-q", "-b", "feat-y"], check=True)
+    subprocess.run(["git", "-C", str(world.root), "commit", "-q", "--allow-empty", "-m", "c2"], check=True)
+    y = subprocess.run(["git", "-C", str(world.root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    g = world.gh(); g["branches"]["feat-y"] = y; g["checks"][y] = GREEN; g["unauthenticated"] = True
+    world.state_file.write_text(json.dumps(g))
+    assert world.driver.run("feat-y", "main", title="T2", body_file=world.body).code == D.HANDOFF
+    world.set(unauthenticated=False)
+    r = _run_plan(world)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert [p["head"]["ref"] for p in world.gh()["pulls"]] == ["feat-x", "feat-y"]
+
+
+def test_a_step_github_never_shows_is_handed_back_unchanged(world, monkeypatch):
+    _no_sleep_ladder(monkeypatch)
+    _pushed(world, GREEN)
+    world.set(pulls=[_pr(world, 1)])
+    o = world.driver.verify_after("feat-x", "main", "merge", pr=1)
+    assert o.code == D.PENDING and not [c for c in world.calls() if "-X" in c]
+    assert not handoff.plan_path(world.root).exists(), "a verification never writes a plan"
+    assert not handoff.verified_marker(world.root, "merge", 1).exists()
+    assert any(line.endswith("--branch feat-x --after merge --pr 1") for line in world.lines)
+
+
+def test_a_merge_of_another_pr_does_not_verify_this_one(world, monkeypatch):
+    _no_sleep_ladder(monkeypatch)
+    _pushed(world, GREEN)
+    world.set(pulls=[_pr(world, 2, state="closed", merged=True, merged_at="2026-11-08T00:00:00Z")])
+    assert world.driver.verify_after("feat-x", "main", "merge", pr=1).code == D.PENDING
+    assert world.driver.verify_after("feat-x", "main", "merge", pr=2).code == D.DONE
+
+
+def test_a_verification_waits_on_the_ladder(world):
+    _pushed(world, GREEN)
+    world.set(pulls=[_pr(world, 1)])
+    def merge_during_the_wait(seconds):
+        world.sleeps.append(seconds)
+        world.set(pulls=[_pr(world, 1, state="closed", merged=True, merged_at="2026-11-08T00:00:00Z")])
+    world.driver.sleep = merge_during_the_wait
+    assert world.driver.verify_after("feat-x", "main", "merge", pr=1).code == D.DONE
+    assert world.sleeps == [D.LADDER[0]]
+
+
+def test_an_unread_state_never_verifies(world, monkeypatch):
+    _no_sleep_ladder(monkeypatch)
+    monkeypatch.setenv("FAKE_GH_STATE", str(world.state_file) + ".missing")
+    assert world.driver.verify_after("feat-x", "main", "merge", pr=1).code == D.BLOCKED
+
+
+def test_an_unknown_step_is_refused(world):
+    with pytest.raises(ValueError):
+        world.driver.verify_after("feat-x", "main", "push")
+
+
+def test_cli_after_and_pr_flags(world, monkeypatch):
+    from ratchethub.cli import main
+    _no_sleep_ladder(monkeypatch)
+    _cli_world(world)
+    _pushed(world, GREEN)
+    world.set(pulls=[_pr(world, 1, state="closed", merged=True, merged_at="2026-11-08T00:00:00Z")])
+    import ratchethub.github.read as rd
+    orig = rd.Reader.__init__
+    rd.Reader.__init__ = lambda self, anon=offline, gh=None, budget=None: orig(self, anon, gh, budget or rd.Budget())
+    try:
+        assert main(["--root", str(world.root), "pr", "--after", "merge", "--pr", "1"]) == D.DONE
+        assert "feat-x" in world.gh()["branches"]
+        with pytest.raises(SystemExit):
+            main(["--root", str(world.root), "pr", "--pr", "1"])
+        with pytest.raises(SystemExit):
+            main(["--root", str(world.root), "pr", "--after", "push"])
+    finally:
+        rd.Reader.__init__ = orig
+
+
+def _release_after(w, notes, after, tag="v1.0.0", sleep=None):
+    return D.release(w.root, SLUG, Reader(anon=offline), tag=tag, notes_file=notes, default_branch="main",
+                     out=w.lines.append, after=after, sleep=sleep or w.sleeps.append)
+
+
+def test_release_plans_verify_their_own_step(main_repo):
+    w, notes = main_repo
+    _release(w, notes)
+    assert "--after tag" in handoff.plan_path(w.root).read_text()
+    w.set(tags=[{"name": "v1.0.0"}])
+    _release(w, notes)
+    assert "--after release" in handoff.plan_path(w.root).read_text()
+
+
+def test_a_tag_verification_waits_out_the_lag_and_plans_nothing(main_repo):
+    w, notes = main_repo
+    def tag_lands(seconds):
+        w.sleeps.append(seconds)
+        w.set(tags=[{"name": "v1.0.0"}])
+    assert _release_after(w, notes, "tag", sleep=tag_lands) == D.DONE
+    assert w.sleeps == [D.LADDER[0]] and not handoff.plan_path(w.root).exists()
+    assert handoff.verified_marker(w.root, "tag", "v1.0.0").exists()
+
+
+def test_a_release_github_never_shows_is_handed_back_unchanged(main_repo):
+    w, notes = main_repo
+    w.set(tags=[{"name": "v1.0.0"}])
+    assert _release_after(w, notes, "release") == D.PENDING
+    assert w.sleeps == list(D.LADDER) and not handoff.plan_path(w.root).exists()
+    assert not handoff.verified_marker(w.root, "release", "v1.0.0").exists()
+
+
+def test_one_release_does_not_spend_the_next(main_repo):
+    """Keyed `release-none`, the first finished release would have refused every later one."""
+    w, notes = main_repo
+    w.set(tags=[{"name": "v1.0.0"}], releases=[{"tag_name": "v1.0.0", "draft": False}])
+    assert _release(w, notes) == D.DONE
+    assert _release(w, notes, tag="v1.0.1") == D.HANDOFF
+    plan = handoff.plan_path(w.root).read_text()
+    assert str(handoff.verified_marker(w.root, "tag", "v1.0.1")) in plan
+    assert not handoff.verified_marker(w.root, "tag", "v1.0.1").exists()
