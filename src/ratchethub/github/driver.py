@@ -202,9 +202,15 @@ class Driver:
         if st.state in (S.CHECKS_PENDING, S.QUEUED):
             if st.state == S.QUEUED:
                 self._say(o, "the PR is queued to merge; a queued merge is not merged")
+            self._say(o, f"waiting for checks, re-reading on the {'/'.join(map(str, LADDER))}s ladder")
             st, ok = self._confirm("checks", lambda: S.derive(self.reader, self.slug, branch, base, head),
                                    lambda s: s.state not in (S.CHECKS_PENDING, S.QUEUED))
             o.state = st
+            # The state block above was read before the wait: show the read the result stands on.
+            self._say(o, f"after the wait: {st.state}" + (f" (PR #{st.pr})" if st.pr else "")
+                      + (f": {st.detail}" if st.detail else ""))
+            for layer in st.layers:
+                self._say(o, f"  {layer.name}: {layer.value} [{layer.channel}]")
             if not ok:
                 self._say(o, f"still {st.state} after the {'/'.join(map(str, LADDER))}s ladder; hand over to a monitor:")
                 self._say(o, f"{self.driver_cmd} --branch {shlex.quote(branch)}")
