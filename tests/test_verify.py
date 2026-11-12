@@ -41,6 +41,22 @@ def test_clean_project_passes(copy):
     assert report.ok, [(c.id, c.detail) for c in report.failures]
 
 
+def test_an_older_guard_fails_only_its_own_check(copy):
+    """The realistic case: the record and the hook agree, so no drift; only the source moved."""
+    from ratchethub.selftest import _older_guard
+    root, home, managed = copy
+    _older_guard(root, home, managed)
+    report = verify_static(root, claude_version=st.VERSION, home=home, managed=(managed,))
+    assert failed_ids(report) == {"guard-current"}, [(c.id, c.detail) for c in report.failures]
+    assert "cycle is owed" in next(c.detail for c in report.checks if c.id == "guard-current")
+
+
+def test_a_current_guard_passes_its_check(copy):
+    report = st.run_case(*copy, None)
+    check = next(c for c in report.checks if c.id == "guard-current")
+    assert check.ok is True
+
+
 def test_selftest_passes():
     assert st.selftest() == []
 

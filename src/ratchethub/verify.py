@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from . import __version__
+from . import generate as _generate
 from .declaration import COMMITTED_NAME, LOCAL_NAME, DeclarationError, load_committed, load_local
 from .generate import (
     COMMITTED_RECORD,
@@ -274,6 +275,16 @@ def _check_hooks(root: Path, sources: list[Source], checks: list[Check]) -> None
         missing.append(f"the guard file {GUARD_PATH}")
     checks.append(Check("hooks", not missing, "missing: " + "; ".join(missing) if missing
                         else "RH's three hooks are wired and the guard file is present"))
+    if guard.is_file():
+        # The drift check compares the guard with RH's last output. This one compares it with the
+        # guard this RatchetHub would write now: a guard change that hasn't been through Generate
+        # leaves the hook that actually runs on the old code, and nothing else would say so.
+        current = guard.read_bytes() == _generate.GUARD_SOURCE.read_bytes()
+        checks.append(Check("guard-current", current,
+                            "the installed guard is this RatchetHub's guard" if current else
+                            f"{GUARD_PATH} is not this RatchetHub's guard source: a guard change hasn't "
+                            "been through Generate, so the hook that runs is the old one. The whole cycle "
+                            "is owed: Generate, static and live Verify, Approve"))
 
 
 LOOSENING_LISTS = ("sandbox.excludedCommands", "sandbox.network.allowUnixSockets")

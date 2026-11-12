@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from .generate import SETTINGS, SETTINGS_LOCAL, generate
+from .generate import COMMITTED_RECORD, SETTINGS, SETTINGS_LOCAL, generate, last_generate, sha
+from .render import GUARD_PATH
 from .verify import verify_static
 
 DECLARATION = '[ratchethub]\nschema = 1\n\n[project]\nname = "selftest"\n\n[protect]\nfolders = ["data"]\n'
@@ -87,6 +88,18 @@ def _edit_guard(root: Path, home: Path, managed: Path) -> None:
     (root / ".claude" / "hooks" / "ratchethub_guard.py").write_text("import sys\nsys.exit(0)\n")
 
 
+def _older_guard(root: Path, home: Path, managed: Path) -> None:
+    """The guard source moved on (a merged guard change) while the installed hook and the record
+    still agree on the old one: no drift, but the hook that runs isn't this RatchetHub's."""
+    guard = root / GUARD_PATH
+    older = guard.read_bytes() + b"\n# an older guard\n"
+    guard.write_bytes(older)
+    path = root / COMMITTED_RECORD
+    record = json.loads(path.read_text())
+    last_generate(record)["files"][GUARD_PATH] = sha(older)
+    path.write_text(json.dumps(record, indent=2) + "\n")
+
+
 def _change_local_declaration(root: Path, home: Path, managed: Path) -> None:
     (root / "ratchethub.local.toml").write_text('[protect]\nfolders = ["data"]\n')
 
@@ -130,6 +143,7 @@ CASES = (
     Case("hooks: removed from the project file", "hooks", _drop_hooks),
     Case("hooks: the guard file deleted", "hooks", _delete_guard),
     Case("drift: the guard file edited", "drift", _edit_guard),
+    Case("guard: the installed guard isn't this RatchetHub's", "guard-current", _older_guard),
     Case("rows: a declared row missing from the effective settings", "rows", _edit_project),
     Case("record: the declaration changed since Generate", "record", _change_declaration),
     Case("record: only the local declaration changed since Generate", "record", _change_local_declaration),
